@@ -67,4 +67,6 @@ jobs:
         run: maturin develop
 
       - name: Test import
-        run: python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+        run: |
+          python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+
