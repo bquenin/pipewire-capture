@@ -5,13 +5,13 @@
 
 use pyo3::prelude::*;
 
+mod error;
 mod portal;
 mod stream;
-mod error;
 
+pub use error::CaptureError;
 pub use portal::PortalCapture;
 pub use stream::CaptureStream;
-pub use error::CaptureError;
 
 /// Check if PipeWire capture is available on this system.
 ///
@@ -30,4 +30,25 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PortalCapture>()?;
     m.add_class::<CaptureStream>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_available_without_wayland() {
+        // When WAYLAND_DISPLAY is not set, should return false
+        std::env::remove_var("WAYLAND_DISPLAY");
+        assert!(!is_available());
+    }
+
+    #[test]
+    fn test_is_available_with_wayland() {
+        // When WAYLAND_DISPLAY is set, should return true
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        assert!(is_available());
+        // Clean up
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
 }

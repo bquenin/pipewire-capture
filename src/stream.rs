@@ -2,7 +2,7 @@
 //!
 //! This module handles capturing video frames from a PipeWire stream.
 
-use numpy::{PyArray3, PyArrayMethods};
+use numpy::PyArray3;
 use pyo3::prelude::*;
 
 /// PipeWire-based video capture stream.
@@ -11,8 +11,11 @@ use pyo3::prelude::*;
 /// Frames are returned as numpy arrays in BGRA format.
 #[pyclass]
 pub struct CaptureStream {
+    #[allow(dead_code)]
     fd: i32,
+    #[allow(dead_code)]
     node_id: u32,
+    #[allow(dead_code)]
     capture_interval: f64,
     running: bool,
     window_closed: bool,
@@ -56,7 +59,7 @@ impl CaptureStream {
     ///
     /// Returns a numpy array of shape (height, width, 4) in BGRA format,
     /// or None if no frame is available yet.
-    pub fn get_frame<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyArray3<u8>>>> {
+    pub fn get_frame<'py>(&self, _py: Python<'py>) -> PyResult<Option<Bound<'py, PyArray3<u8>>>> {
         // TODO: Return the latest frame from the buffer
         // For now, return None
         Ok(None)

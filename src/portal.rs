@@ -5,14 +5,13 @@
 
 use pyo3::prelude::*;
 
-use crate::error::CaptureError;
-
 /// Portal-based window selection for screen capture.
 ///
 /// Uses xdg-desktop-portal ScreenCast interface to show a system
 /// window picker dialog and obtain a PipeWire stream for the
 /// selected window.
 #[pyclass]
+#[derive(Default)]
 pub struct PortalCapture {
     // TODO: Add fields for:
     // - D-Bus connection
@@ -72,14 +71,5 @@ impl PortalCapture {
         self.fd = None;
         self.node_id = None;
         Ok(())
-    }
-}
-
-impl Default for PortalCapture {
-    fn default() -> Self {
-        Self {
-            fd: None,
-            node_id: None,
-        }
     }
 }
