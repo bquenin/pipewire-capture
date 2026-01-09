@@ -70,8 +70,8 @@ Linux multimedia server that handles video/audio streams. After portal provides 
 3. Receive video buffers via stream callbacks
 4. Convert buffers to BGRA numpy arrays
 
-### zbus
-Rust async D-Bus library. Used for portal communication. Requires tokio runtime.
+### ASHPD
+High-level Rust wrapper for xdg-desktop-portal (https://github.com/bilelmoussaoui/ashpd). Provides idiomatic async API for portal communication including ScreenCast. Uses zbus internally.
 
 ### pipewire-rs
 Official Rust bindings for PipeWire. Handles stream setup and frame reception.
@@ -81,10 +81,12 @@ Official Rust bindings for PipeWire. Handles stream setup and frame reception.
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Project structure | Done | Cargo.toml, pyproject.toml, CI/CD |
+| Rust tooling | Done | rust-toolchain.toml (1.83.0), .rustfmt.toml, clippy |
+| Unit tests | Setup | Test infrastructure in place, basic tests for error/lib |
 | `is_available()` | Partial | Checks WAYLAND_DISPLAY, TODO: check portal |
 | `PortalCapture` | Skeleton | Struct defined, methods are stubs |
 | `CaptureStream` | Skeleton | Struct defined, methods are stubs |
-| D-Bus integration | TODO | Need zbus implementation |
+| D-Bus integration | TODO | Using ASHPD library |
 | PipeWire capture | TODO | Need pipewire-rs implementation |
 | Wheel building | Setup | CI configured, untested |
 
@@ -126,8 +128,17 @@ maturin build --release
 ```bash
 cargo fmt --check
 cargo clippy -- -D warnings
+cargo test
 cargo build --release
 ```
+
+### Contributing via Pull Requests
+All changes should be made via pull requests:
+1. Create a feature branch: `git checkout -b issue-N-description`
+2. Make changes and ensure all checks pass
+3. Commit with descriptive message
+4. Push and create PR: `gh pr create`
+5. Merge after review
 
 ## Code Style
 

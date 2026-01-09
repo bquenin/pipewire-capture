@@ -15,7 +15,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 numpy = "0.22"
 pipewire = "0.8"
-zbus = { version = "4", default-features = false, features = ["tokio"] }
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 parking_lot = "0.12"
 thiserror = "2"

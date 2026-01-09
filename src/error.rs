@@ -31,3 +31,26 @@ impl From<CaptureError> for PyErr {
         PyRuntimeError::new_err(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        let err = CaptureError::UserCancelled;
+        assert_eq!(err.to_string(), "User cancelled window selection");
+    }
+
+    #[test]
+    fn test_portal_not_available_error() {
+        let err = CaptureError::PortalNotAvailable("test reason".to_string());
+        assert_eq!(err.to_string(), "Portal not available: test reason");
+    }
+
+    #[test]
+    fn test_pipewire_error() {
+        let err = CaptureError::PipeWire("connection failed".to_string());
+        assert_eq!(err.to_string(), "PipeWire error: connection failed");
+    }
+}
