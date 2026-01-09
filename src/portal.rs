@@ -9,6 +9,7 @@ use ashpd::desktop::PersistMode;
 use pyo3::prelude::*;
 use std::os::fd::{AsRawFd, OwnedFd};
 use tokio::runtime::Runtime;
+use tracing::{debug, error, info};
 
 /// Result of a successful portal flow.
 struct PortalResult {
@@ -34,18 +35,23 @@ pub struct PortalCapture {
 
 /// Run the async portal flow to select a window.
 async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
+    debug!("Starting portal flow");
+
     // 1. Create screencast proxy
+    debug!("Creating screencast proxy");
     let screencast = Screencast::new()
         .await
         .map_err(|e| CaptureError::PortalNotAvailable(e.to_string()))?;
 
     // 2. Create session
+    debug!("Creating session");
     let session = screencast
         .create_session()
         .await
         .map_err(|e| CaptureError::SessionFailed(e.to_string()))?;
 
     // 3. Select sources (window only)
+    debug!("Selecting sources (window only)");
     screencast
         .select_sources(
             &session,
@@ -59,6 +65,7 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
         .map_err(|e| CaptureError::SessionFailed(e.to_string()))?;
 
     // 4. Start - shows window picker
+    debug!("Starting window picker");
     let response = screencast
         .start(&session, None)
         .await
@@ -69,6 +76,7 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
             e,
             ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)
         ) {
+            debug!("User cancelled window selection");
             CaptureError::UserCancelled
         } else {
             CaptureError::SessionFailed(e.to_string())
@@ -79,12 +87,16 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
     let stream = streams.streams().first().ok_or(CaptureError::NoStream)?;
     let node_id = stream.pipe_wire_node_id();
     let (width, height) = stream.size().unwrap_or((0, 0));
+    debug!(node_id, width, height, "Window selected");
 
     // 6. Get PipeWire file descriptor
+    debug!("Opening PipeWire remote");
     let fd = screencast
         .open_pipe_wire_remote(&session)
         .await
         .map_err(|e| CaptureError::PipeWire(e.to_string()))?;
+
+    info!(node_id, width, height, "Portal flow completed successfully");
 
     Ok(PortalResult {
         fd,
@@ -128,7 +140,7 @@ impl PortalCapture {
                 true
             }
             Err(e) => {
-                eprintln!("Portal error: {}", e);
+                error!(error = %e, "Portal flow failed");
                 false
             }
         };
@@ -152,6 +164,7 @@ impl PortalCapture {
 
     /// Close the portal session and release resources.
     pub fn close(&mut self) -> PyResult<()> {
+        debug!("Closing portal capture");
         self.owned_fd = None;
         self.node_id = None;
         self.width = None;

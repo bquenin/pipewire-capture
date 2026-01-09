@@ -19,3 +19,4 @@ ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 parking_lot = "0.12"
 thiserror = "2"
+tracing = "0.1"
