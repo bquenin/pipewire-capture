@@ -138,7 +138,11 @@ All changes should be made via pull requests:
 2. Make changes and ensure all checks pass
 3. Commit with descriptive message
 4. Push and create PR: `gh pr create`
-5. Merge after review
+5. Merge after review: `gh pr merge --squash`
+
+**Repo settings:**
+- Only squash merges allowed
+- Head branches auto-delete after merge
 
 ## Code Style
 
