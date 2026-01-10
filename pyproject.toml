@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pipewire-capture"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python library for PipeWire video capture with pre-built wheels"
 readme = "README.md"
 license = "MIT"
