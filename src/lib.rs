@@ -6,7 +6,6 @@
 use pyo3::prelude::*;
 
 mod error;
-mod gpu;
 mod portal;
 mod stream;
 

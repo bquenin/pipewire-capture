@@ -3,68 +3,26 @@
 //! This module handles capturing video frames from a PipeWire stream.
 
 use crate::error::CaptureError;
-use crate::gpu::{spa_format_to_drm, GpuFrameImporter};
 use numpy::{PyArray3, PyArrayMethods};
 use parking_lot::Mutex;
 use pipewire::{
     context::Context,
     main_loop::MainLoop,
     properties::properties,
-    spa::{
-        pod::builder::{builder_add, Builder},
-        sys as spa_sys,
-        utils::Id,
-    },
+    spa::sys as spa_sys,
     stream::{Stream, StreamFlags, StreamListener, StreamRef, StreamState},
 };
 use pyo3::prelude::*;
 use std::{
-    mem::size_of,
-    os::fd::{FromRawFd, OwnedFd, RawFd},
+    os::fd::{FromRawFd, OwnedFd},
     sync::{mpsc, Arc},
     thread::JoinHandle,
     time::Instant,
 };
 use tracing::{debug, error, info, warn};
 
-// DRM syncobj support for explicit sync
-use std::fs::OpenOptions;
-use std::os::fd::BorrowedFd;
-use std::sync::OnceLock;
-
-/// Global DRM render node fd for syncobj operations
-static DRM_FD: OnceLock<OwnedFd> = OnceLock::new();
-
-/// Get or open the DRM render node for syncobj operations
-fn get_drm_fd() -> Option<BorrowedFd<'static>> {
-    let fd = DRM_FD.get_or_init(|| {
-        // Try common render node paths
-        for path in &["/dev/dri/renderD128", "/dev/dri/renderD129"] {
-            if let Ok(file) = OpenOptions::new().read(true).write(true).open(path) {
-                use std::os::fd::IntoRawFd;
-                let raw_fd = file.into_raw_fd();
-                return unsafe { OwnedFd::from_raw_fd(raw_fd) };
-            }
-        }
-        // Return an invalid fd that will cause syncobj operations to fail gracefully
-        unsafe { OwnedFd::from_raw_fd(-1) }
-    });
-
-    use std::os::fd::AsRawFd;
-    if fd.as_raw_fd() < 0 {
-        None
-    } else {
-        // Safety: The DRM_FD is stored in a static OnceLock, so it lives for 'static
-        Some(unsafe { BorrowedFd::borrow_raw(fd.as_raw_fd()) })
-    }
-}
-
-// SPA constants for explicit sync
-const SPA_TYPE_OBJECT_PARAM_META: u32 = spa_sys::SPA_TYPE_OBJECT_ParamMeta;
-const SPA_PARAM_META: u32 = spa_sys::SPA_PARAM_Meta;
-const SPA_PARAM_META_TYPE: u32 = spa_sys::SPA_PARAM_META_type;
-const SPA_PARAM_META_SIZE: u32 = spa_sys::SPA_PARAM_META_size;
-const SPA_META_SYNC_TIMELINE: u32 = spa_sys::SPA_META_SyncTimeline;
+// For fd duplication
+extern crate libc;
 
 /// Shared state between Python thread and PipeWire thread.
 struct SharedState {
@@ -105,12 +63,6 @@ struct StreamUserData {
     shared: Arc<Mutex<SharedState>>,
     capture_interval: f64,
     weak_mainloop: pipewire::main_loop::WeakMainLoop,
-    /// GPU frame importer for DMA buffer handling.
-    gpu_importer: GpuFrameImporter,
-    /// Current video format (SPA format code).
-    format: u32,
-    /// Current stride in bytes.
-    stride: u32,
 }
 
 /// PipeWire-based video capture stream.
@@ -316,16 +268,6 @@ fn pipewire_thread(
 ) {
     debug!(node_id, "PipeWire thread starting");
 
-    // Initialize GPU importer first (requires EGL)
-    let gpu_importer = match GpuFrameImporter::new() {
-        Ok(gpu) => gpu,
-        Err(e) => {
-            error!("Failed to initialize GPU importer: {}", e);
-            shared.lock().stream_ended = true;
-            return;
-        }
-    };
-
     // Initialize PipeWire
     pipewire::init();
 
@@ -365,7 +307,6 @@ fn pipewire_thread(
         &mainloop,
         Arc::clone(&shared),
         capture_interval,
-        gpu_importer,
     );
 
     let (_stream, _listener) = match result {
@@ -407,7 +348,6 @@ fn setup_stream(
     mainloop: &MainLoop,
     shared: Arc<Mutex<SharedState>>,
     capture_interval: f64,
-    gpu_importer: GpuFrameImporter,
 ) -> Result<(Stream, StreamListener<StreamUserData>), CaptureError> {
     let props = properties! {
         *pipewire::keys::MEDIA_TYPE => "Video",
@@ -422,9 +362,6 @@ fn setup_stream(
         shared,
         capture_interval,
         weak_mainloop: mainloop.downgrade(),
-        gpu_importer,
-        format: 0,
-        stride: 0,
     };
 
     let listener = stream
@@ -566,7 +503,7 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
 
 /// Handle format parameter changes.
 fn on_param_changed(
-    stream: &StreamRef,
+    _stream: &StreamRef,
     data: &mut StreamUserData,
     id: u32,
     param: Option<&pipewire::spa::pod::Pod>,
@@ -593,77 +530,17 @@ fn on_param_changed(
         video_info
     };
 
-    // Calculate stride (row size in bytes)
-    // For 32-bit formats (BGRA, etc), stride = width * 4
-    let stride = info.size.width * 4;
-
     debug!(
         width = info.size.width,
         height = info.size.height,
         format = info.format,
-        stride,
         "Video format negotiated"
     );
-
-    // Store format info for GPU import
-    data.format = info.format;
-    data.stride = stride;
 
     {
         let mut shared = data.shared.lock();
         shared.width = info.size.width;
         shared.height = info.size.height;
-    }
-
-    // Request SyncTimeline metadata for explicit sync (NVIDIA fix)
-    // This allows us to wait for the compositor to finish writing before reading
-    request_sync_timeline_metadata(stream);
-}
-
-/// Request SyncTimeline metadata from PipeWire for explicit synchronization.
-///
-/// This is needed for NVIDIA GPUs which don't support implicit buffer sync.
-/// When the compositor supports explicit sync, it will provide syncobj fds
-/// that we can wait on before reading the DmaBuf.
-fn request_sync_timeline_metadata(stream: &StreamRef) {
-    let mut pod_data = Vec::with_capacity(256);
-    let mut builder = Builder::new(&mut pod_data);
-
-    // Build SPA_PARAM_Meta object requesting SyncTimeline metadata
-    // Equivalent to C code:
-    //   spa_pod_builder_push_object(&b, &f, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-    //   spa_pod_builder_add(&b,
-    //       SPA_PARAM_META_type, SPA_POD_Id(SPA_META_SyncTimeline),
-    //       SPA_PARAM_META_size, SPA_POD_Int(sizeof(struct spa_meta_sync_timeline)),
-    //       0);
-    let result = builder_add!(
-        &mut builder,
-        Object(SPA_TYPE_OBJECT_PARAM_META, SPA_PARAM_META) {
-            SPA_PARAM_META_TYPE => Id(Id(SPA_META_SYNC_TIMELINE)),
-            SPA_PARAM_META_SIZE => Int(size_of::<spa_sys::spa_meta_sync_timeline>() as i32),
-        }
-    );
-
-    if let Err(e) = result {
-        warn!("Failed to build SyncTimeline meta param: {:?}", e);
-        return;
-    }
-
-    // Get the pod from the builder
-    let pod = unsafe {
-        let raw_pod = spa_sys::spa_pod_builder_deref(builder.as_raw_ptr(), 0);
-        if raw_pod.is_null() {
-            return;
-        }
-        &*(raw_pod as *const pipewire::spa::pod::Pod)
-    };
-
-    // Update stream params to request SyncTimeline metadata
-    let mut params = [pod];
-    if let Err(e) = stream.update_params(&mut params) {
-        warn!("Failed to request SyncTimeline metadata: {:?}", e);
-    } else {
-        info!("Requested SyncTimeline metadata for explicit sync");
     }
 }
 
@@ -671,7 +548,7 @@ fn request_sync_timeline_metadata(stream: &StreamRef) {
 fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
     let now = Instant::now();
 
-    // Use raw buffer API to access spa_buffer for metadata lookup
+    // Use raw buffer API to access spa_buffer
     let pw_buffer = unsafe { stream.dequeue_raw_buffer() };
     if pw_buffer.is_null() {
         return;
@@ -720,185 +597,45 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
         return;
     }
 
-    // Check if this is a DMA buffer
+    // Check buffer type
     let first_data = unsafe { &*datas_ptr };
-    let data_type_raw = first_data.type_;
+    let data_type = first_data.type_;
 
-    // SPA_DATA_DmaBuf = 3
+    // SPA_DATA_MemPtr = 2, SPA_DATA_DmaBuf = 3
+    const SPA_DATA_MEMPTR: u32 = 2;
     const SPA_DATA_DMABUF: u32 = 3;
-    if data_type_raw != SPA_DATA_DMABUF {
-        // For non-DmaBuf, try direct memory access
-        if !first_data.data.is_null() && !first_data.chunk.is_null() {
-            let chunk = unsafe { &*first_data.chunk };
-            let size = chunk.size as usize;
-            let offset = chunk.offset as usize;
-            if size > 0 {
-                let frame_slice = unsafe {
-                    std::slice::from_raw_parts(first_data.data.add(offset) as *const u8, size)
-                };
-                let mut shared = data.shared.lock();
-                shared.frame_buffer = Some(frame_slice.to_vec());
-                shared.last_capture_time = now;
+
+    match data_type {
+        SPA_DATA_MEMPTR => {
+            // Memory-mapped buffer - direct access
+            if !first_data.data.is_null() && !first_data.chunk.is_null() {
+                let chunk = unsafe { &*first_data.chunk };
+                let size = chunk.size as usize;
+                let offset = chunk.offset as usize;
+                if size > 0 {
+                    let frame_slice = unsafe {
+                        std::slice::from_raw_parts(first_data.data.add(offset) as *const u8, size)
+                    };
+                    let mut shared = data.shared.lock();
+                    shared.frame_buffer = Some(frame_slice.to_vec());
+                    shared.last_capture_time = now;
+                }
             }
         }
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
-        return;
-    }
-
-    // DMA buffer - check for SyncTimeline metadata and wait if present
-    wait_on_sync_timeline(spa_buffer, datas_ptr, n_datas);
-
-    // Get DmaBuf fd
-    let dmabuf_fd = first_data.fd as i32;
-
-    if dmabuf_fd < 0 {
-        warn!("Invalid DmaBuf fd: {}", dmabuf_fd);
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
-        return;
-    }
-
-    // Convert SPA format to DRM format
-    // For portal DmaBuf streams, if format is unknown, try common defaults
-    let drm_format = if data.format != 0 {
-        match spa_format_to_drm(data.format) {
-            Some(fmt) => fmt,
-            None => {
-                warn!("Unknown SPA format: {}", data.format);
-                unsafe { stream.queue_raw_buffer(pw_buffer) };
-                return;
-            }
+        SPA_DATA_DMABUF => {
+            // DmaBuf not supported - we request MAP_BUFFERS which should give us MemPtr
+            error!(
+                "Received DmaBuf buffer (type={}), but only MemPtr is supported. \
+                 This may indicate an old PipeWire/compositor version. \
+                 Please ensure you have PipeWire 0.3.30+ and a modern compositor (GNOME 3.36+, KDE 5.20+).",
+                data_type
+            );
         }
-    } else {
-        // Format not received via param_changed, try common default
-        // Most compositors use XRGB8888 (BGRx) or ARGB8888 (BGRA)
-        use crate::gpu::DRM_FORMAT_XRGB8888;
-        DRM_FORMAT_XRGB8888
-    };
-
-    // Use calculated stride or fallback to width * 4
-    let stride = if data.stride != 0 {
-        data.stride
-    } else {
-        width * 4
-    };
-
-    // Import frame via EGL
-    match data
-        .gpu_importer
-        .import_frame(dmabuf_fd, width, height, stride, drm_format)
-    {
-        Ok(frame_vec) => {
-            let mut shared = data.shared.lock();
-            shared.frame_buffer = Some(frame_vec);
-            shared.last_capture_time = now;
-        }
-        Err(e) => {
-            error!("GPU import failed: {}", e);
+        _ => {
+            warn!("Unknown buffer type: {}", data_type);
         }
     }
 
     // Queue buffer back to PipeWire
     unsafe { stream.queue_raw_buffer(pw_buffer) };
-}
-
-/// Wait on explicit sync acquire_point if SyncTimeline metadata is present.
-///
-/// When the compositor supports explicit sync, it provides:
-/// - SPA_META_SyncTimeline metadata with acquire_point and release_point
-/// - Extra data blocks: datas[1] = acquire syncobj fd, datas[2] = release syncobj fd
-///
-/// We wait on the acquire_point before reading the DmaBuf to ensure the
-/// compositor has finished writing to it.
-fn wait_on_sync_timeline(
-    spa_buffer: *mut spa_sys::spa_buffer,
-    datas_ptr: *mut spa_sys::spa_data,
-    n_datas: u32,
-) {
-    // Find SyncTimeline metadata
-    let stl = unsafe {
-        spa_sys::spa_buffer_find_meta_data(
-            spa_buffer,
-            SPA_META_SYNC_TIMELINE,
-            size_of::<spa_sys::spa_meta_sync_timeline>(),
-        ) as *const spa_sys::spa_meta_sync_timeline
-    };
-
-    if stl.is_null() {
-        // No SyncTimeline metadata - compositor doesn't support explicit sync
-        // Fall back to implicit sync (which may be slow on NVIDIA)
-        return;
-    }
-
-    let acquire_point = unsafe { (*stl).acquire_point };
-    if acquire_point == 0 {
-        // No acquire point set
-        return;
-    }
-
-    // Check if we have the acquire syncobj fd (should be in datas[1])
-    if n_datas < 2 {
-        return;
-    }
-
-    let acquire_data = unsafe { &*datas_ptr.add(1) };
-
-    // Check if datas[1] is actually a SyncObj (type=5)
-    const SPA_DATA_SYNCOBJ: u32 = 5;
-    if acquire_data.type_ != SPA_DATA_SYNCOBJ {
-        // Compositor doesn't support explicit sync for this buffer
-        return;
-    }
-
-    let acquire_fd = acquire_data.fd as RawFd;
-    if acquire_fd < 0 {
-        return;
-    }
-
-    let wait_start = Instant::now();
-
-    // Get DRM device fd for syncobj operations
-    let Some(drm_fd) = get_drm_fd() else {
-        return;
-    };
-
-    // Import the syncobj fd as a local handle
-    let syncobj_fd = unsafe { BorrowedFd::borrow_raw(acquire_fd) };
-    let handle = match drm_ffi::syncobj::fd_to_handle(drm_fd, syncobj_fd, false) {
-        Ok(result) => result.handle,
-        Err(_) => return,
-    };
-
-    // Wait on the timeline point (5 second timeout from now)
-    // timeout_nsec is an absolute deadline in CLOCK_MONOTONIC nanoseconds
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
-    let now_nsec = ts.tv_sec * 1_000_000_000 + ts.tv_nsec;
-    let timeout_nsec = now_nsec + 5_000_000_000i64; // 5 seconds from now
-
-    let handles = [handle];
-    let points = [acquire_point];
-
-    match drm_ffi::syncobj::timeline_wait(
-        drm_fd,
-        &handles,
-        &points,
-        timeout_nsec,
-        true,  // wait_all
-        true,  // wait_for_submit
-        false, // wait_available
-    ) {
-        Ok(_) => {
-            let elapsed = wait_start.elapsed();
-            info!("SyncTimeline acquired in {:?}", elapsed);
-        }
-        Err(e) => {
-            warn!("SyncTimeline timeline_wait error: {}", e);
-        }
-    }
-
-    // Clean up the imported handle
-    let _ = drm_ffi::syncobj::destroy(drm_fd, handle);
 }

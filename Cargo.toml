@@ -20,12 +20,8 @@ pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 numpy = "0.22"
 pipewire = "0.8"
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 parking_lot = "0.12"
 thiserror = "2"
 tracing = "0.1"
 libc = "0.2"
-nix = { version = "0.29", features = ["fs", "ioctl"] }
-drm-ffi = "0.9"
-khronos-egl = { version = "6", features = ["dynamic"] }
-gl = "0.14"
