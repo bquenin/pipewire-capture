@@ -82,21 +82,24 @@ Official Rust bindings for PipeWire. Handles stream setup and frame reception.
 |-----------|--------|-------|
 | Project structure | Done | Cargo.toml, pyproject.toml, CI/CD |
 | Rust tooling | Done | rust-toolchain.toml (1.83.0), .rustfmt.toml, clippy |
+| CI/CD | Done | GitHub Actions: lint, build, test-python jobs |
 | Unit tests | Setup | Test infrastructure in place, basic tests for error/lib |
+| Logging | Done | Using `tracing` crate for structured logging |
 | `is_available()` | Partial | Checks WAYLAND_DISPLAY, TODO: check portal |
-| `PortalCapture` | Skeleton | Struct defined, methods are stubs |
+| `PortalCapture` | **Done** | Full ASHPD integration, window picker works |
 | `CaptureStream` | Skeleton | Struct defined, methods are stubs |
-| D-Bus integration | TODO | Using ASHPD library |
+| D-Bus integration | **Done** | Using ASHPD library (PR #8) |
 | PipeWire capture | TODO | Need pipewire-rs implementation |
 | Wheel building | Setup | CI configured, untested |
 
 ## GitHub Issues for Tracking
 
-1. **Issue #1**: Implement xdg-desktop-portal ScreenCast integration
-2. **Issue #2**: Implement PipeWire stream capture
+1. **Issue #1**: ~~Implement xdg-desktop-portal ScreenCast integration~~ ✅ (PR #8)
+2. **Issue #2**: Implement PipeWire stream capture ← **Next**
 3. **Issue #3**: Set up manylinux wheel building
 4. **Issue #4**: Test on Steam Deck and Nobara
 5. **Issue #5**: Publish v0.1.0 to PyPI
+6. **Issue #9**: ~~Add tracing for structured logging~~ ✅ (PR #10)
 
 ## Development Workflow
 
@@ -111,17 +114,24 @@ sudo dnf install pipewire-devel libclang-devel
 
 ### Build and test locally
 ```bash
-# Install maturin
+# Using uv (recommended)
+uv pip install maturin
+uv run maturin develop
+uv run python -c "from pipewire_capture import is_available; print(is_available())"
+
+# Or using pip directly
 pip install maturin
-
-# Development build (creates .so in-place)
 maturin develop
-
-# Test in Python
 python -c "from pipewire_capture import is_available; print(is_available())"
 
 # Release build
 maturin build --release
+```
+
+### Manual testing
+```bash
+# Test portal window picker (requires Wayland session)
+uv run python examples/test_portal.py
 ```
 
 ### Run Rust checks
@@ -149,6 +159,7 @@ All changes should be made via pull requests:
 - **Rust**: Follow standard Rust conventions, use `cargo fmt`
 - **Python**: Minimal Python code, mostly re-exports from native module
 - **Error handling**: Use `thiserror` for Rust errors, convert to `PyErr` at boundary
+- **Logging**: Use `tracing` crate (`debug!`, `info!`, `error!`) for structured logging
 - **Threading**: PipeWire runs its own main loop; use `parking_lot` for synchronization
 
 ## Integration with interpreter
