@@ -43,8 +43,8 @@ jobs:
               # Install Python build tools
               /opt/python/cp311-cp311/bin/pip install maturin
 
-              # Build wheel (skip auditwheel, we do it manually)
-              /opt/python/cp311-cp311/bin/maturin build --release --out dist-raw
+              # Build wheel (skip auditwheel, we do it manually with --exclude)
+              /opt/python/cp311-cp311/bin/maturin build --release --out dist-raw --auditwheel skip
 
               # Repair wheel, excluding libpipewire (use system library at runtime)
               /opt/python/cp311-cp311/bin/pip install auditwheel
@@ -68,6 +68,11 @@ jobs:
           name: wheels-linux-x86_64
           path: dist
 
+      - name: Install PipeWire runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpipewire-0.3-0
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -77,6 +82,16 @@ jobs:
         run: |
           pip install dist/*.whl numpy
           python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+          # Verify no bundled libpipewire
+          python -c "
+          import pipewire_capture._native as n
+          import subprocess
+          result = subprocess.run(['ldd', n.__file__], capture_output=True, text=True)
+          print(result.stdout)
+          assert 'libpipewire' in result.stdout
+          assert 'pipewire_capture.libs' not in result.stdout, 'libpipewire should not be bundled!'
+          print('✓ Wheel correctly uses system libpipewire')
+          "
 
   publish:
     needs: [build-linux, test-wheels]

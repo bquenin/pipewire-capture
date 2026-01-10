@@ -26,6 +26,8 @@ Example usage:
             stream.stop()
 """
 
+from importlib.metadata import version
+
 from pipewire_capture._native import (
     CaptureStream,
     PortalCapture,
@@ -38,4 +40,4 @@ __all__ = [
     "is_available",
 ]
 
-__version__ = "0.2.1"
+__version__ = version("pipewire-capture")

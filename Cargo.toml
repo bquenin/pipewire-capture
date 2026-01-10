@@ -1,6 +1,6 @@
 [package]
 name = "pipewire-capture"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT"
 description = "Python library for PipeWire video capture with pre-built wheels"
