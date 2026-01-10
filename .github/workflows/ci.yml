@@ -61,10 +61,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libpipewire-0.3-dev libspa-0.2-dev libclang-dev
+          python -m venv .venv
+          source .venv/bin/activate
           pip install maturin numpy
 
       - name: Build and install
-        run: maturin develop
+        run: |
+          source .venv/bin/activate
+          maturin develop
 
       - name: Test import
-        run: python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+        run: |
+          source .venv/bin/activate
+          python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+

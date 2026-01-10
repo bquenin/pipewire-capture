@@ -9,14 +9,19 @@ keywords = ["pipewire", "wayland", "screen-capture", "video"]
 
 [lib]
 name = "pipewire_capture"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "test_capture"
+path = "src/bin/test_capture.rs"
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 numpy = "0.22"
 pipewire = "0.8"
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 parking_lot = "0.12"
 thiserror = "2"
 tracing = "0.1"
+libc = "0.2"

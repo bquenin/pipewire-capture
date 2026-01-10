@@ -87,7 +87,16 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
     let stream = streams.streams().first().ok_or(CaptureError::NoStream)?;
     let node_id = stream.pipe_wire_node_id();
     let (width, height) = stream.size().unwrap_or((0, 0));
-    debug!(node_id, width, height, "Window selected");
+    let position = stream.position();
+    let source_type = stream.source_type();
+    debug!(
+        node_id,
+        width,
+        height,
+        ?position,
+        ?source_type,
+        "Window selected"
+    );
 
     // 6. Get PipeWire file descriptor
     debug!("Opening PipeWire remote");

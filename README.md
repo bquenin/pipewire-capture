@@ -47,10 +47,10 @@ def on_window_selected(success: bool):
         print("No stream available")
         return
 
-    fd, node_id = stream_info
+    fd, node_id, width, height = stream_info
 
     # Start capturing frames
-    stream = CaptureStream(fd, node_id, capture_interval=0.25)
+    stream = CaptureStream(fd, node_id, width, height, capture_interval=0.25)
     stream.start()
 
     # Get frames
@@ -59,7 +59,7 @@ def on_window_selected(success: bool):
         if frame is not None:
             print(f"Got frame: {frame.shape}")
 
-        if stream.is_window_closed():
+        if stream.window_invalid:
             print("Window was closed")
             break
 
@@ -80,17 +80,17 @@ Check if PipeWire capture is available on this system.
 Handles window selection via xdg-desktop-portal.
 
 - `select_window(callback)` - Show window picker, calls callback with success/failure
-- `get_stream_info()` - Returns `(fd, node_id)` tuple or `None`
+- `get_stream_info()` - Returns `(fd, node_id, width, height)` tuple or `None`
 - `close()` - Release resources
 
 ### `CaptureStream`
 
 Captures frames from a PipeWire stream.
 
-- `CaptureStream(fd, node_id, capture_interval=0.25)` - Create stream
+- `CaptureStream(fd, node_id, width, height, capture_interval=0.25)` - Create stream
 - `start()` - Start capturing
 - `get_frame()` - Get latest frame as numpy array (BGRA)
-- `is_window_closed()` - Check if window was closed
+- `window_invalid` - Property: True if window was closed
 - `stop()` - Stop capturing
 
 ## Building from source

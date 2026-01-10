@@ -3,6 +3,9 @@
 //! This crate provides Python bindings for capturing video frames from
 //! PipeWire streams using the xdg-desktop-portal ScreenCast interface.
 
+// False positive in Rust 1.85 clippy for PyO3 return type annotations
+#![allow(clippy::useless_conversion)]
+
 use pyo3::prelude::*;
 
 mod error;
@@ -36,19 +39,31 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
+    // Note: These tests modify environment variables, so they must run serially.
+    // We combine them into one test to avoid race conditions.
     #[test]
-    fn test_is_available_without_wayland() {
-        // When WAYLAND_DISPLAY is not set, should return false
-        std::env::remove_var("WAYLAND_DISPLAY");
-        assert!(!is_available());
-    }
+    fn test_is_available() {
+        // Save original value
+        let original = std::env::var("WAYLAND_DISPLAY").ok();
 
-    #[test]
-    fn test_is_available_with_wayland() {
-        // When WAYLAND_DISPLAY is set, should return true
-        std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
-        assert!(is_available());
-        // Clean up
+        // Test without WAYLAND_DISPLAY
         std::env::remove_var("WAYLAND_DISPLAY");
+        assert!(
+            !is_available(),
+            "Should return false when WAYLAND_DISPLAY is not set"
+        );
+
+        // Test with WAYLAND_DISPLAY
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        assert!(
+            is_available(),
+            "Should return true when WAYLAND_DISPLAY is set"
+        );
+
+        // Restore original value
+        match original {
+            Some(val) => std::env::set_var("WAYLAND_DISPLAY", val),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
     }
 }

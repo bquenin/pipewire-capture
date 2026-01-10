@@ -24,6 +24,15 @@ pub enum CaptureError {
 
     #[error("D-Bus error: {0}")]
     DBus(String),
+
+    #[error("Stream already started")]
+    AlreadyStarted,
+
+    #[error("Failed to spawn thread: {0}")]
+    ThreadSpawnFailed(String),
+
+    #[error("Frame size mismatch: expected {expected}, got {actual}")]
+    FrameSizeMismatch { expected: usize, actual: usize },
 }
 
 impl From<CaptureError> for PyErr {
