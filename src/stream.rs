@@ -21,9 +21,6 @@ use std::{
 };
 use tracing::{debug, error, info, warn};
 
-// For fd duplication
-extern crate libc;
-
 /// Shared state between Python thread and PipeWire thread.
 struct SharedState {
     /// Latest frame data (BGRA, height * width * 4 bytes).
