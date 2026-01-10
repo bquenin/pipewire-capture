@@ -7,17 +7,9 @@ use crate::error::CaptureError;
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use pyo3::prelude::*;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use tokio::runtime::Runtime;
-use tracing::{debug, error, info};
-
-/// Result of a successful portal flow.
-struct PortalResult {
-    fd: OwnedFd,
-    node_id: u32,
-    width: i32,
-    height: i32,
-}
+use tracing::{debug, info};
 
 /// Portal-based window selection for screen capture.
 ///
@@ -26,15 +18,10 @@ struct PortalResult {
 /// selected window.
 #[pyclass]
 #[derive(Default)]
-pub struct PortalCapture {
-    owned_fd: Option<OwnedFd>,
-    node_id: Option<u32>,
-    width: Option<i32>,
-    height: Option<i32>,
-}
+pub struct PortalCapture;
 
 /// Run the async portal flow to select a window.
-async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
+async fn run_portal_flow() -> Result<(i32, u32, i32, i32), CaptureError> {
     debug!("Starting portal flow");
 
     // 1. Create screencast proxy
@@ -105,79 +92,53 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
         .await
         .map_err(|e| CaptureError::PipeWire(e.to_string()))?;
 
-    info!(node_id, width, height, "Portal flow completed successfully");
+    // Duplicate the fd so caller gets independent ownership
+    // The original OwnedFd will be dropped when this function returns
+    let dup_fd = unsafe { libc::dup(fd.as_raw_fd()) };
+    if dup_fd < 0 {
+        return Err(CaptureError::PipeWire("Failed to duplicate fd".to_string()));
+    }
 
-    Ok(PortalResult {
-        fd,
+    info!(
         node_id,
         width,
         height,
-    })
+        fd = dup_fd,
+        "Portal flow completed successfully"
+    );
+
+    Ok((dup_fd, node_id, width, height))
 }
 
 #[pymethods]
 impl PortalCapture {
     /// Create a new PortalCapture instance.
     #[new]
-    pub fn new() -> PyResult<Self> {
-        Ok(Self::default())
+    pub fn new() -> Self {
+        Self
     }
 
-    /// Start the window selection flow.
+    /// Show the system window picker and return stream info.
     ///
-    /// This will show the system window picker dialog. The provided
-    /// callback will be called with True on success or False on
-    /// cancellation/error.
+    /// This is a blocking operation that shows the system window picker dialog.
+    /// Returns a tuple of (fd, node_id, width, height) on success, or None if
+    /// the user cancelled the selection. Raises an exception on error.
     ///
-    /// Note: This is a blocking operation that runs the D-Bus main loop.
-    pub fn select_window(&mut self, callback: PyObject) -> PyResult<()> {
+    /// The returned fd is a duplicated file descriptor that the caller owns.
+    /// Pass it to CaptureStream to start capturing frames.
+    pub fn select_window(&self) -> PyResult<Option<(i32, u32, i32, i32)>> {
         // Release GIL before blocking D-Bus operations
-        let result: Result<PortalResult, CaptureError> = Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             py.allow_threads(|| {
                 let rt = Runtime::new().map_err(|e| CaptureError::DBus(e.to_string()))?;
                 rt.block_on(run_portal_flow())
             })
         });
 
-        // Store results if successful, log errors
-        let success = match result {
-            Ok(portal_result) => {
-                self.owned_fd = Some(portal_result.fd);
-                self.node_id = Some(portal_result.node_id);
-                self.width = Some(portal_result.width);
-                self.height = Some(portal_result.height);
-                true
-            }
-            Err(e) => {
-                error!(error = %e, "Portal flow failed");
-                false
-            }
-        };
-
-        // Call callback with result
-        Python::with_gil(|py| {
-            callback.call1(py, (success,))?;
-            Ok(())
-        })
-    }
-
-    /// Get the PipeWire stream info after successful window selection.
-    ///
-    /// Returns a tuple of (fd, node_id, width, height) or None if no stream is available.
-    pub fn get_stream_info(&self) -> Option<(i32, u32, i32, i32)> {
-        match (&self.owned_fd, self.node_id, self.width, self.height) {
-            (Some(fd), Some(node_id), Some(w), Some(h)) => Some((fd.as_raw_fd(), node_id, w, h)),
-            _ => None,
+        match result {
+            Ok(info) => Ok(Some(info)),
+            Err(CaptureError::UserCancelled) => Ok(None),
+            Err(e) => Err(e.into()),
         }
-    }
-
-    /// Close the portal session and release resources.
-    pub fn close(&mut self) -> PyResult<()> {
-        debug!("Closing portal capture");
-        self.owned_fd = None;
-        self.node_id = None;
-        self.width = None;
-        self.height = None;
-        Ok(())
     }
 }
