@@ -1,5 +1,7 @@
 # pipewire-capture
 
+[![PyPI version](https://badge.fury.io/py/pipewire-capture.svg)](https://pypi.org/project/pipewire-capture/)
+
 Python library for PipeWire video capture with pre-built wheels.
 
 This library provides PipeWire-based video capture for Wayland Linux environments, using the xdg-desktop-portal ScreenCast interface for window selection. It's distributed as pre-built wheels, so no compilation or system dependencies are needed for installation.
