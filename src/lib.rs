@@ -3,6 +3,9 @@
 //! This crate provides Python bindings for capturing video frames from
 //! PipeWire streams using the xdg-desktop-portal ScreenCast interface.
 
+// False positive in Rust 1.85 clippy for PyO3 return type annotations
+#![allow(clippy::useless_conversion)]
+
 use pyo3::prelude::*;
 
 mod error;
