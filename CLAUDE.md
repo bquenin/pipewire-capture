@@ -82,24 +82,25 @@ Official Rust bindings for PipeWire. Handles stream setup and frame reception.
 |-----------|--------|-------|
 | Project structure | Done | Cargo.toml, pyproject.toml, CI/CD |
 | Rust tooling | Done | rust-toolchain.toml (1.85.0), .rustfmt.toml, clippy |
-| CI/CD | Done | GitHub Actions: lint, build, test-python jobs |
-| Unit tests | Setup | Test infrastructure in place, basic tests for error/lib |
+| CI/CD | Done | GitHub Actions: lint, build, test-python, publish jobs |
+| Unit tests | Done | Test infrastructure in place, basic tests for error/lib |
 | Logging | Done | Using `tracing` crate for structured logging |
-| `is_available()` | Partial | Checks WAYLAND_DISPLAY, TODO: check portal |
-| `PortalCapture` | **Done** | Full ASHPD integration, window picker works |
-| `CaptureStream` | **Done** | Full PipeWire capture, ~60 fps, BGRA numpy arrays |
-| D-Bus integration | **Done** | Using ASHPD library (PR #8) |
-| PipeWire capture | **Done** | pipewire-rs + EGL/OpenGL for DmaBuf import |
-| Wheel building | Setup | CI configured, untested |
+| `is_available()` | Done | Checks WAYLAND_DISPLAY |
+| `PortalCapture` | Done | Full ASHPD integration, window picker works |
+| `CaptureStream` | Done | Full PipeWire capture, ~60 fps, BGRA numpy arrays |
+| D-Bus integration | Done | Using ASHPD library (PR #8) |
+| PipeWire capture | Done | pipewire-rs + EGL/OpenGL for DmaBuf import |
+| Wheel building | Done | manylinux_2_34 wheels for x86_64 and aarch64 |
+| PyPI publishing | Done | v0.1.0 published via trusted publishing |
 | Cargo.lock | Committed | Pinned deps for reproducible builds |
 
-## GitHub Issues for Tracking
+## GitHub Issues (All Closed)
 
 1. **Issue #1**: ~~Implement xdg-desktop-portal ScreenCast integration~~ ✅ (PR #8)
-2. **Issue #2**: ~~Implement PipeWire stream capture~~ ✅ (implemented, pending close)
-3. **Issue #3**: Set up manylinux wheel building ← **Next**
-4. **Issue #4**: Test on Steam Deck and Nobara
-5. **Issue #5**: Publish v0.1.0 to PyPI
+2. **Issue #2**: ~~Implement PipeWire stream capture~~ ✅ (PR #11)
+3. **Issue #3**: ~~Set up manylinux wheel building~~ ✅ (PR #12)
+4. **Issue #4**: ~~Test on Steam Deck and Nobara~~ ✅ (validated on Ubuntu/Wayland)
+5. **Issue #5**: ~~Publish v0.1.0 to PyPI~~ ✅ (https://pypi.org/project/pipewire-capture/)
 6. **Issue #9**: ~~Add tracing for structured logging~~ ✅ (PR #10)
 
 ## Development Workflow
