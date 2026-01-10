@@ -15,10 +15,10 @@ jobs:
       matrix:
         include:
           - target: x86_64
-            # Uses default manylinux_2_35 container (AlmaLinux 9)
+            # Uses default manylinux_2_34 container (AlmaLinux 9)
           - target: aarch64
             # Use native aarch64 container with QEMU emulation instead of cross-compilation
-            container: quay.io/pypa/manylinux_2_35_aarch64
+            container: quay.io/pypa/manylinux_2_34_aarch64
     steps:
       - uses: actions/checkout@v4
 
@@ -38,10 +38,10 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: "2_35"
+          manylinux: "2_34"
           container: ${{ matrix.container || '' }}
           before-script-linux: |
-            # Install PipeWire and clang dev libraries (AlmaLinux 9 / manylinux_2_35)
+            # Install PipeWire and clang dev libraries (AlmaLinux 9 / manylinux_2_34)
             dnf install -y dnf-plugins-core
             dnf config-manager --set-enabled crb
             dnf install -y pipewire-devel clang-devel
