@@ -13,9 +13,20 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64, aarch64]
+        include:
+          - target: x86_64
+            # Uses default manylinux_2_28 container (AlmaLinux 8)
+          - target: aarch64
+            # Use native aarch64 container with QEMU emulation instead of cross-compilation
+            container: quay.io/pypa/manylinux_2_28_aarch64
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.target == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,23 +38,13 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: "2_28"  # PipeWire requires newer glibc (AlmaLinux 8 based)
+          manylinux: "2_28"
+          container: ${{ matrix.container || '' }}
           before-script-linux: |
-            # Detect package manager and install PipeWire + clang dev libraries
-            # rust-cross images (for aarch64) are Debian-based, standard manylinux is AlmaLinux
-            if command -v apt-get &> /dev/null; then
-              apt-get update
-              apt-get install -y libpipewire-0.3-dev libspa-0.2-dev libclang-dev
-            elif command -v yum &> /dev/null; then
-              yum install -y yum-utils
-              yum-config-manager --enable powertools || true
-              yum install -y pipewire-devel clang-devel
-            elif command -v dnf &> /dev/null; then
-              dnf install -y pipewire-devel clang-devel
-            else
-              echo "No supported package manager found"
-              exit 1
-            fi
+            # Install PipeWire and clang dev libraries (AlmaLinux 8 / manylinux_2_28)
+            yum install -y yum-utils
+            yum-config-manager --enable powertools || true
+            yum install -y pipewire-devel clang-devel
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
