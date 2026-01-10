@@ -15,10 +15,10 @@ jobs:
       matrix:
         include:
           - target: x86_64
-            # Uses default manylinux_2_28 container (AlmaLinux 8)
+            # Uses default manylinux_2_35 container (AlmaLinux 9)
           - target: aarch64
             # Use native aarch64 container with QEMU emulation instead of cross-compilation
-            container: quay.io/pypa/manylinux_2_28_aarch64
+            container: quay.io/pypa/manylinux_2_35_aarch64
     steps:
       - uses: actions/checkout@v4
 
@@ -38,13 +38,13 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: "2_28"
+          manylinux: "2_35"
           container: ${{ matrix.container || '' }}
           before-script-linux: |
-            # Install PipeWire and clang dev libraries (AlmaLinux 8 / manylinux_2_28)
-            yum install -y yum-utils
-            yum-config-manager --enable powertools || true
-            yum install -y pipewire-devel clang-devel
+            # Install PipeWire and clang dev libraries (AlmaLinux 9 / manylinux_2_35)
+            dnf install -y dnf-plugins-core
+            dnf config-manager --set-enabled crb
+            dnf install -y pipewire-devel clang-devel
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
