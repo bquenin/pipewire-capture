@@ -10,21 +10,15 @@ if not is_available():
     print("Not running on Wayland, exiting")
     exit(1)
 
-
-def on_result(success):
-    print(f"Selection result: {success}")
-
-
 # Step 1: Select a window via portal
 print("Opening window picker...")
 portal = PortalCapture()
-portal.select_window(on_result)
+info = portal.select_window()
 
-info = portal.get_stream_info()
 print(f"Stream info: {info}")
 
 if not info:
-    print("\nNo stream info - selection was cancelled or failed.")
+    print("\nNo stream info - selection was cancelled.")
     exit(1)
 
 fd, node_id, width, height = info
@@ -51,7 +45,6 @@ while time.time() - start_time < 5 and not stream.window_invalid:
 
 # Step 4: Stop and cleanup
 stream.stop()
-portal.close()
 
 if stream.window_invalid:
     print("\nWindow was closed during capture.")

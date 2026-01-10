@@ -76,6 +76,18 @@ High-level Rust wrapper for xdg-desktop-portal (https://github.com/bilelmoussaou
 ### pipewire-rs
 Official Rust bindings for PipeWire. Handles stream setup and frame reception.
 
+## API Design Decisions
+
+**Pull model for CaptureStream:** We use polling (`get_frame()`) rather than callbacks. This matches the [scrap](https://lib.rs/crates/scrap) library pattern and is simpler for OCR/translation use cases where you only need the latest frame, not every frame.
+
+**Direct return for PortalCapture:** `select_window()` returns results directly rather than via callback. One-shot blocking operations should return values; callbacks are for streams (like `on_frame_arrived` in windows-capture).
+
+**Comparison with other libraries:**
+- Push (callback): PipeWire native, OBS, windows-capture, screencapturekit-rs
+- Pull (polling): scrap, our library
+
+Both patterns are valid. Pull is appropriate here because missing frames between polls doesn't matter for the interpreter use case.
+
 ## Current Implementation Status
 
 | Component | Status | Notes |

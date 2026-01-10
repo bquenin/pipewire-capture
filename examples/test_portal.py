@@ -9,16 +9,10 @@ if not is_available():
     print("Not running on Wayland, exiting")
     exit(1)
 
-
-def on_result(success):
-    print(f"Selection result: {success}")
-
-
 print("Opening window picker...")
 portal = PortalCapture()
-portal.select_window(on_result)
+info = portal.select_window()
 
-info = portal.get_stream_info()
 print(f"Stream info: {info}")
 
 if info:
@@ -28,4 +22,4 @@ if info:
     print(f"  Window size: {width}x{height}")
     print("\nSuccess! Portal integration is working.")
 else:
-    print("\nNo stream info - selection was cancelled or failed.")
+    print("\nNo stream info - selection was cancelled.")
