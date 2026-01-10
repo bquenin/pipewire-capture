@@ -10,23 +10,16 @@ permissions:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - target: x86_64
-            # Uses default manylinux_2_34 container (AlmaLinux 9)
+            runner: ubuntu-latest
           - target: aarch64
-            # Use native aarch64 container with QEMU emulation instead of cross-compilation
-            container: quay.io/pypa/manylinux_2_34_aarch64
+            runner: ubuntu-24.04-arm  # Native ARM64 runner (much faster than QEMU)
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        if: matrix.target == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,7 +32,6 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: "2_34"
-          container: ${{ matrix.container || '' }}
           before-script-linux: |
             # Install PipeWire and clang dev libraries (AlmaLinux 9 / manylinux_2_34)
             dnf install -y dnf-plugins-core
