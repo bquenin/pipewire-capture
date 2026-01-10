@@ -10,14 +10,13 @@ Example usage:
     if is_available():
         # Window selection via portal
         portal = PortalCapture()
-        portal.select_window(lambda success: print(f"Selected: {success}"))
+        info = portal.select_window()  # Returns (fd, node_id, width, height) or None
 
-        stream_info = portal.get_stream_info()
-        if stream_info:
-            fd, node_id = stream_info
+        if info:
+            fd, node_id, width, height = info
 
             # Frame capture
-            stream = CaptureStream(fd, node_id)
+            stream = CaptureStream(fd, node_id, width, height)
             stream.start()
 
             frame = stream.get_frame()  # numpy array (H, W, 4) BGRA
@@ -25,8 +24,6 @@ Example usage:
                 print(f"Got frame: {frame.shape}")
 
             stream.stop()
-
-        portal.close()
 """
 
 from pipewire_capture._native import (
@@ -41,4 +38,4 @@ __all__ = [
     "is_available",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
