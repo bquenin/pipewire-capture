@@ -10,10 +10,14 @@ permissions:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64, aarch64]
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm  # Native ARM64 runner (much faster than QEMU)
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,11 +31,12 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: "2_28"  # PipeWire requires newer glibc
+          manylinux: "2_34"
           before-script-linux: |
-            # Install PipeWire development libraries
-            apt-get update
-            apt-get install -y libpipewire-0.3-dev libspa-0.2-dev libclang-dev
+            # Install PipeWire and clang dev libraries (AlmaLinux 9 / manylinux_2_34)
+            dnf install -y dnf-plugins-core
+            dnf config-manager --set-enabled crb
+            dnf install -y pipewire-devel clang-devel
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -39,8 +44,28 @@ jobs:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
-  publish:
+  test-wheels:
     needs: [build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download x86_64 wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install and test wheel
+        run: |
+          pip install dist/*.whl numpy
+          python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+
+  publish:
+    needs: [build-linux, test-wheels]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment:
