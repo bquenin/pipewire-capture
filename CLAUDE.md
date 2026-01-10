@@ -81,22 +81,23 @@ Official Rust bindings for PipeWire. Handles stream setup and frame reception.
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Project structure | Done | Cargo.toml, pyproject.toml, CI/CD |
-| Rust tooling | Done | rust-toolchain.toml (1.83.0), .rustfmt.toml, clippy |
+| Rust tooling | Done | rust-toolchain.toml (1.85.0), .rustfmt.toml, clippy |
 | CI/CD | Done | GitHub Actions: lint, build, test-python jobs |
 | Unit tests | Setup | Test infrastructure in place, basic tests for error/lib |
 | Logging | Done | Using `tracing` crate for structured logging |
 | `is_available()` | Partial | Checks WAYLAND_DISPLAY, TODO: check portal |
 | `PortalCapture` | **Done** | Full ASHPD integration, window picker works |
-| `CaptureStream` | Skeleton | Struct defined, methods are stubs |
+| `CaptureStream` | **Done** | Full PipeWire capture, ~60 fps, BGRA numpy arrays |
 | D-Bus integration | **Done** | Using ASHPD library (PR #8) |
-| PipeWire capture | TODO | Need pipewire-rs implementation |
+| PipeWire capture | **Done** | pipewire-rs + EGL/OpenGL for DmaBuf import |
 | Wheel building | Setup | CI configured, untested |
+| Cargo.lock | Committed | Pinned deps for reproducible builds |
 
 ## GitHub Issues for Tracking
 
 1. **Issue #1**: ~~Implement xdg-desktop-portal ScreenCast integration~~ ✅ (PR #8)
-2. **Issue #2**: Implement PipeWire stream capture ← **Next**
-3. **Issue #3**: Set up manylinux wheel building
+2. **Issue #2**: ~~Implement PipeWire stream capture~~ ✅ (implemented, pending close)
+3. **Issue #3**: Set up manylinux wheel building ← **Next**
 4. **Issue #4**: Test on Steam Deck and Nobara
 5. **Issue #5**: Publish v0.1.0 to PyPI
 6. **Issue #9**: ~~Add tracing for structured logging~~ ✅ (PR #10)
@@ -143,7 +144,10 @@ cargo build --release
 ```
 
 ### Contributing via Pull Requests
-All changes should be made via pull requests:
+
+**IMPORTANT: NEVER commit directly to `main`. All changes MUST go through pull requests.**
+
+Workflow:
 1. Create a feature branch: `git checkout -b issue-N-description`
 2. Make changes and ensure all checks pass
 3. Commit with descriptive message
