@@ -11,7 +11,8 @@ use pyo3::prelude::*;
 use std::os::fd::AsRawFd;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
-use tracing::{debug, info};
+use tokio::sync::oneshot;
+use tracing::{debug, info, warn};
 
 /// Global runtime for D-Bus operations.
 /// Using a persistent runtime ensures D-Bus connections are properly maintained
@@ -20,6 +21,77 @@ static RUNTIME: OnceLock<Mutex<Runtime>> = OnceLock::new();
 
 fn get_runtime() -> &'static Mutex<Runtime> {
     RUNTIME.get_or_init(|| Mutex::new(Runtime::new().expect("Failed to create tokio runtime")))
+}
+
+/// Result from the portal flow, including a channel to close the session.
+struct PortalResult {
+    fd: i32,
+    node_id: u32,
+    width: i32,
+    height: i32,
+    close_tx: oneshot::Sender<()>,
+}
+
+/// A portal session that keeps the screen capture stream alive.
+///
+/// The session must remain open for the PipeWire stream to be valid.
+/// Call `close()` when done capturing, or let it be garbage collected.
+#[pyclass]
+pub struct PortalSession {
+    /// PipeWire file descriptor.
+    #[pyo3(get)]
+    pub fd: i32,
+    /// PipeWire node ID for the stream.
+    #[pyo3(get)]
+    pub node_id: u32,
+    /// Stream width in pixels.
+    #[pyo3(get)]
+    pub width: i32,
+    /// Stream height in pixels.
+    #[pyo3(get)]
+    pub height: i32,
+    /// Channel to signal session close. None if already closed.
+    close_tx: Option<oneshot::Sender<()>>,
+}
+
+#[pymethods]
+impl PortalSession {
+    /// Close the portal session and release resources.
+    ///
+    /// This should be called when done capturing. After closing,
+    /// the PipeWire stream will become invalid.
+    pub fn close(&mut self) {
+        if let Some(tx) = self.close_tx.take() {
+            debug!("Closing portal session");
+            let _ = tx.send(());
+        }
+    }
+
+    /// Check if the session is still open.
+    #[getter]
+    pub fn is_open(&self) -> bool {
+        self.close_tx.is_some()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PortalSession(fd={}, node_id={}, size={}x{}, open={})",
+            self.fd,
+            self.node_id,
+            self.width,
+            self.height,
+            self.is_open()
+        )
+    }
+}
+
+impl Drop for PortalSession {
+    fn drop(&mut self) {
+        if self.close_tx.is_some() {
+            debug!("PortalSession dropped, closing session");
+            self.close();
+        }
+    }
 }
 
 /// Portal-based window selection for screen capture.
@@ -32,7 +104,7 @@ fn get_runtime() -> &'static Mutex<Runtime> {
 pub struct PortalCapture;
 
 /// Run the async portal flow to select a window.
-async fn run_portal_flow() -> Result<(i32, u32, i32, i32), CaptureError> {
+async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
     debug!("Starting portal flow");
 
     // 1. Create screencast proxy
@@ -104,19 +176,30 @@ async fn run_portal_flow() -> Result<(i32, u32, i32, i32), CaptureError> {
         .map_err(|e| CaptureError::PipeWire(e.to_string()))?;
 
     // Duplicate the fd so caller gets independent ownership
-    // The original OwnedFd will be dropped when this function returns
     let dup_fd = unsafe { libc::dup(fd.as_raw_fd()) };
     if dup_fd < 0 {
         return Err(CaptureError::PipeWire("Failed to duplicate fd".to_string()));
     }
 
-    // Close the session explicitly to release portal resources.
-    // This allows subsequent select_window() calls to work correctly.
-    debug!("Closing portal session");
-    session
-        .close()
-        .await
-        .map_err(|e| CaptureError::SessionFailed(e.to_string()))?;
+    // Create channel to signal session close
+    let (close_tx, close_rx) = oneshot::channel::<()>();
+
+    // Spawn a task that keeps the session alive until close is signaled.
+    // The session must stay open for the PipeWire stream to remain valid.
+    tokio::spawn(async move {
+        // Move session and screencast into this task to keep them alive
+        let _session = session;
+        let _screencast = screencast;
+
+        // Wait for close signal (or channel drop)
+        match close_rx.await {
+            Ok(()) => debug!("Session close requested"),
+            Err(_) => warn!("Session close channel dropped without explicit close"),
+        }
+
+        // Session will be dropped here, triggering cleanup
+        debug!("Portal session task ending, session will be closed");
+    });
 
     info!(
         node_id,
@@ -126,7 +209,13 @@ async fn run_portal_flow() -> Result<(i32, u32, i32, i32), CaptureError> {
         "Portal flow completed successfully"
     );
 
-    Ok((dup_fd, node_id, width, height))
+    Ok(PortalResult {
+        fd: dup_fd,
+        node_id,
+        width,
+        height,
+        close_tx,
+    })
 }
 
 #[pymethods]
@@ -137,15 +226,25 @@ impl PortalCapture {
         Self
     }
 
-    /// Show the system window picker and return stream info.
+    /// Show the system window picker and return a PortalSession.
     ///
     /// This is a blocking operation that shows the system window picker dialog.
-    /// Returns a tuple of (fd, node_id, width, height) on success, or None if
-    /// the user cancelled the selection. Raises an exception on error.
+    /// Returns a PortalSession on success, or None if the user cancelled.
+    /// Raises an exception on error.
     ///
-    /// The returned fd is a duplicated file descriptor that the caller owns.
-    /// Pass it to CaptureStream to start capturing frames.
-    pub fn select_window(&self) -> PyResult<Option<(i32, u32, i32, i32)>> {
+    /// The PortalSession keeps the stream alive. Call `session.close()` when
+    /// done capturing, or let it be garbage collected.
+    ///
+    /// Example:
+    ///     session = portal.select_window()
+    ///     if session:
+    ///         stream = CaptureStream(session.fd, session.node_id,
+    ///                                session.width, session.height)
+    ///         stream.start()
+    ///         # ... capture frames ...
+    ///         stream.stop()
+    ///         session.close()
+    pub fn select_window(&self) -> PyResult<Option<PortalSession>> {
         // Release GIL before blocking D-Bus operations
         let result = Python::with_gil(|py| {
             py.allow_threads(|| {
@@ -155,7 +254,13 @@ impl PortalCapture {
         });
 
         match result {
-            Ok(info) => Ok(Some(info)),
+            Ok(info) => Ok(Some(PortalSession {
+                fd: info.fd,
+                node_id: info.node_id,
+                width: info.width,
+                height: info.height,
+                close_tx: Some(info.close_tx),
+            })),
             Err(CaptureError::UserCancelled) => Ok(None),
             Err(e) => Err(e.into()),
         }

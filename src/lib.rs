@@ -13,7 +13,7 @@ mod portal;
 mod stream;
 
 pub use error::CaptureError;
-pub use portal::PortalCapture;
+pub use portal::{PortalCapture, PortalSession};
 pub use stream::CaptureStream;
 
 /// Check if PipeWire capture is available on this system.
@@ -31,6 +31,7 @@ fn is_available() -> bool {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_available, m)?)?;
     m.add_class::<PortalCapture>()?;
+    m.add_class::<PortalSession>()?;
     m.add_class::<CaptureStream>()?;
     Ok(())
 }
