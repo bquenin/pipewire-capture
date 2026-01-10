@@ -6,7 +6,7 @@ This library solves installation failures on **Steam Deck** and **Nobara Linux**
 
 **Root cause**: `PyGObject` depends on `pycairo` which has no Linux wheels on PyPI. Users must install system dev libraries (`libcairo2-dev`, `libgirepository1.0-dev`, etc.) which fails on Steam Deck (read-only filesystem) and is error-prone on Nobara.
 
-**Solution**: Replace PyGObject/GStreamer with a pure Rust library using `pipewire-rs` + `PyO3`, distributed as pre-built manylinux wheels requiring zero system dependencies.
+**Solution**: Replace PyGObject/GStreamer with a pure Rust library using `pipewire-rs` + `PyO3`, distributed as pre-built manylinux wheels. Requires PipeWire runtime library (installed by default on modern Linux desktops).
 
 Related issues:
 - https://github.com/bquenin/interpreter/issues/163 (Steam Deck)
@@ -102,11 +102,12 @@ Both patterns are valid. Pull is appropriate here because missing frames between
 | `CaptureStream` | Done | Full PipeWire capture, ~60 fps, BGRA numpy arrays |
 | D-Bus integration | Done | Using ASHPD library (PR #8) |
 | PipeWire capture | Done | pipewire-rs + EGL/OpenGL for DmaBuf import |
-| Wheel building | Done | manylinux_2_34 wheels for x86_64 and aarch64 |
-| PyPI publishing | Done | v0.1.0 published via trusted publishing |
+| Wheel building | Done | manylinux_2_34 wheels for x86_64 and aarch64, excludes libpipewire |
+| PyPI publishing | Done | v0.2.2 published via trusted publishing |
 | Cargo.lock | Committed | Pinned deps for reproducible builds |
+| Version management | Done | Single source of truth in Cargo.toml, Python reads via importlib.metadata |
 
-## GitHub Issues (All Closed)
+## GitHub Issues (Closed)
 
 1. **Issue #1**: ~~Implement xdg-desktop-portal ScreenCast integration~~ ✅ (PR #8)
 2. **Issue #2**: ~~Implement PipeWire stream capture~~ ✅ (PR #11)
@@ -114,6 +115,9 @@ Both patterns are valid. Pull is appropriate here because missing frames between
 4. **Issue #4**: ~~Test on Steam Deck and Nobara~~ ✅ (validated on Ubuntu/Wayland)
 5. **Issue #5**: ~~Publish v0.1.0 to PyPI~~ ✅ (https://pypi.org/project/pipewire-capture/)
 6. **Issue #9**: ~~Add tracing for structured logging~~ ✅ (PR #10)
+7. **Issue #14**: ~~callback borrow error~~ ✅ (PR #15)
+8. **Issue #17**: ~~SPA plugin path error from bundled libpipewire~~ ✅ (PR #18)
+9. **Issue #20**: ~~v0.2.1 still bundles libpipewire~~ ✅ (PR #21)
 
 ## Development Workflow
 
@@ -127,19 +131,18 @@ sudo dnf install pipewire-devel libclang-devel
 ```
 
 ### Build and test locally
+
+**IMPORTANT: Always use `uv` for Python package management in this project.**
+
 ```bash
-# Using uv (recommended)
-uv pip install maturin
+# Build and install in development mode
 uv run maturin develop
+
+# Quick test
 uv run python -c "from pipewire_capture import is_available; print(is_available())"
 
-# Or using pip directly
-pip install maturin
-maturin develop
-python -c "from pipewire_capture import is_available; print(is_available())"
-
 # Release build
-maturin build --release
+uv run maturin build --release
 ```
 
 ### Manual testing
@@ -183,7 +186,7 @@ Workflow:
 
 After this library is published, the interpreter project needs updates:
 
-1. **pyproject.toml**: Replace `PyGObject>=3.42.0` with `pipewire-capture>=0.1.0`
+1. **pyproject.toml**: Replace `PyGObject>=3.42.0` with `pipewire-capture>=0.2.0`
 2. **linux_wayland.py**: Rewrite to use new API (see integration plan in interpreter repo)
 
 Integration plan saved at: `bquenin/interpreter` branch `feature/pipewire-capture-integration`
