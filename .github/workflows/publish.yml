@@ -15,28 +15,42 @@ jobs:
         include:
           - target: x86_64
             runner: ubuntu-latest
+            manylinux: manylinux_2_34_x86_64
           - target: aarch64
             runner: ubuntu-24.04-arm  # Native ARM64 runner (much faster than QEMU)
+            manylinux: manylinux_2_34_aarch64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Build and repair wheels
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/io" \
+            -w /io \
+            quay.io/pypa/${{ matrix.manylinux }} \
+            /bin/bash -c '
+              set -ex
+              # Install build dependencies
+              dnf install -y dnf-plugins-core
+              dnf config-manager --set-enabled crb
+              dnf install -y pipewire-devel clang-devel
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist
-          manylinux: "2_34"
-          before-script-linux: |
-            # Install PipeWire and clang dev libraries (AlmaLinux 9 / manylinux_2_34)
-            dnf install -y dnf-plugins-core
-            dnf config-manager --set-enabled crb
-            dnf install -y pipewire-devel clang-devel
+              # Install Rust
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              source ~/.cargo/env
+
+              # Install Python build tools
+              /opt/python/cp311-cp311/bin/pip install maturin
+
+              # Build wheel (skip auditwheel, we do it manually)
+              /opt/python/cp311-cp311/bin/maturin build --release --out dist-raw
+
+              # Repair wheel, excluding libpipewire (use system library at runtime)
+              /opt/python/cp311-cp311/bin/pip install auditwheel
+              mkdir -p dist
+              auditwheel repair --exclude libpipewire-0.3.so.0 -w dist dist-raw/*.whl
+            '
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
