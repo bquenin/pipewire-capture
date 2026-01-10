@@ -27,11 +27,14 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: "2_28"  # PipeWire requires newer glibc
+          manylinux: "2_28"  # PipeWire requires newer glibc (AlmaLinux 8 based)
           before-script-linux: |
-            # Install PipeWire development libraries
-            apt-get update
-            apt-get install -y libpipewire-0.3-dev libspa-0.2-dev libclang-dev
+            # manylinux_2_28 is based on AlmaLinux 8, which uses yum
+            # Enable PowerTools for development packages
+            yum install -y yum-utils
+            yum-config-manager --enable powertools
+            # Install PipeWire and clang development libraries
+            yum install -y pipewire-devel clang-devel
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -39,8 +42,28 @@ jobs:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
-  publish:
+  test-wheels:
     needs: [build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download x86_64 wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install and test wheel
+        run: |
+          pip install dist/*.whl numpy
+          python -c "from pipewire_capture import is_available; print(f'Available: {is_available()}')"
+
+  publish:
+    needs: [build-linux, test-wheels]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment:
