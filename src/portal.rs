@@ -99,6 +99,14 @@ async fn run_portal_flow() -> Result<(i32, u32, i32, i32), CaptureError> {
         return Err(CaptureError::PipeWire("Failed to duplicate fd".to_string()));
     }
 
+    // Close the session explicitly to release portal resources.
+    // This allows subsequent select_window() calls to work correctly.
+    debug!("Closing portal session");
+    session
+        .close()
+        .await
+        .map_err(|e| CaptureError::SessionFailed(e.to_string()))?;
+
     info!(
         node_id,
         width,
