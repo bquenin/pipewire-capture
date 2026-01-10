@@ -6,10 +6,21 @@
 use crate::error::CaptureError;
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
+use parking_lot::Mutex;
 use pyo3::prelude::*;
 use std::os::fd::AsRawFd;
+use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tracing::{debug, info};
+
+/// Global runtime for D-Bus operations.
+/// Using a persistent runtime ensures D-Bus connections are properly maintained
+/// across multiple select_window() calls.
+static RUNTIME: OnceLock<Mutex<Runtime>> = OnceLock::new();
+
+fn get_runtime() -> &'static Mutex<Runtime> {
+    RUNTIME.get_or_init(|| Mutex::new(Runtime::new().expect("Failed to create tokio runtime")))
+}
 
 /// Portal-based window selection for screen capture.
 ///
@@ -138,7 +149,7 @@ impl PortalCapture {
         // Release GIL before blocking D-Bus operations
         let result = Python::with_gil(|py| {
             py.allow_threads(|| {
-                let rt = Runtime::new().map_err(|e| CaptureError::DBus(e.to_string()))?;
+                let rt = get_runtime().lock();
                 rt.block_on(run_portal_flow())
             })
         });

@@ -39,3 +39,8 @@ Issues = "https://github.com/bquenin/pipewire-capture/issues"
 python-source = "python"
 features = ["pyo3/extension-module"]
 module-name = "pipewire_capture._native"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.11.5",
+]
