@@ -42,7 +42,7 @@ print("Capturing for 5 seconds (or until window closes)...")
 start_time = time.time()
 frame_count = 0
 
-while time.time() - start_time < 5 and not stream.is_window_closed():
+while time.time() - start_time < 5 and not stream.window_invalid:
     frame = stream.get_frame()
     if frame is not None:
         frame_count += 1
@@ -53,7 +53,7 @@ while time.time() - start_time < 5 and not stream.is_window_closed():
 stream.stop()
 portal.close()
 
-if stream.is_window_closed():
+if stream.window_invalid:
     print("\nWindow was closed during capture.")
 
 print(f"\nDone. Captured {frame_count} frames in {time.time() - start_time:.1f}s")

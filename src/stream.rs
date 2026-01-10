@@ -193,7 +193,8 @@ impl CaptureStream {
     }
 
     /// Check if the captured window has been closed.
-    pub fn is_window_closed(&self) -> bool {
+    #[getter]
+    pub fn window_invalid(&self) -> bool {
         self.shared.lock().window_closed
     }
 
