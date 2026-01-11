@@ -11,10 +11,6 @@ keywords = ["pipewire", "wayland", "screen-capture", "video"]
 name = "pipewire_capture"
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "test_capture"
-path = "src/bin/test_capture.rs"
-
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 numpy = "0.22"
