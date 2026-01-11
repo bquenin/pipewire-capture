@@ -8,7 +8,7 @@ use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use parking_lot::Mutex;
 use pyo3::prelude::*;
-use std::os::fd::AsRawFd;
+use std::os::fd::IntoRawFd;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
@@ -23,13 +23,14 @@ fn get_runtime() -> &'static Mutex<Runtime> {
     RUNTIME.get_or_init(|| Mutex::new(Runtime::new().expect("Failed to create tokio runtime")))
 }
 
-/// Result from the portal flow, including a channel to close the session.
+/// Result from the portal flow, including channels to close the session.
 struct PortalResult {
     fd: i32,
     node_id: u32,
     width: i32,
     height: i32,
     close_tx: oneshot::Sender<()>,
+    done_rx: oneshot::Receiver<()>,
 }
 
 /// A portal session that keeps the screen capture stream alive.
@@ -52,18 +53,25 @@ pub struct PortalSession {
     pub height: i32,
     /// Channel to signal session close. None if already closed.
     close_tx: Option<oneshot::Sender<()>>,
+    /// Channel to receive close completion notification.
+    done_rx: Option<oneshot::Receiver<()>>,
 }
 
 #[pymethods]
 impl PortalSession {
     /// Close the portal session and release resources.
     ///
-    /// This should be called when done capturing. After closing,
-    /// the PipeWire stream will become invalid.
+    /// This blocks until the session is fully closed.
     pub fn close(&mut self) {
         if let Some(tx) = self.close_tx.take() {
             debug!("Closing portal session");
             let _ = tx.send(());
+
+            // Block and wait for close to complete
+            if let Some(done_rx) = self.done_rx.take() {
+                let rt = get_runtime().lock();
+                let _ = rt.block_on(done_rx);
+            }
         }
     }
 
@@ -175,46 +183,50 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
         .await
         .map_err(|e| CaptureError::PipeWire(e.to_string()))?;
 
-    // Duplicate the fd so caller gets independent ownership
-    let dup_fd = unsafe { libc::dup(fd.as_raw_fd()) };
-    if dup_fd < 0 {
-        return Err(CaptureError::PipeWire("Failed to duplicate fd".to_string()));
-    }
+    // Use into_raw_fd() to transfer ownership without duplicating.
+    // CaptureStream will take sole ownership via from_raw_fd().
+    let fd_raw = fd.into_raw_fd();
 
-    // Create channel to signal session close
+    // Create channels for close signaling and completion notification
     let (close_tx, close_rx) = oneshot::channel::<()>();
+    let (done_tx, done_rx) = oneshot::channel::<()>();
 
     // Spawn a task that keeps the session alive until close is signaled.
-    // The session must stay open for the PipeWire stream to remain valid.
     tokio::spawn(async move {
-        // Move session and screencast into this task to keep them alive
-        let _session = session;
-        let _screencast = screencast;
-
         // Wait for close signal (or channel drop)
         match close_rx.await {
             Ok(()) => debug!("Session close requested"),
             Err(_) => warn!("Session close channel dropped without explicit close"),
         }
 
-        // Session will be dropped here, triggering cleanup
-        debug!("Portal session task ending, session will be closed");
+        // Explicitly close the session via D-Bus
+        if let Err(e) = session.close().await {
+            warn!("Failed to close session: {}", e);
+        }
+
+        // Drop screencast proxy
+        drop(screencast);
+
+        // Signal that close is complete
+        let _ = done_tx.send(());
+        debug!("Portal session task ending");
     });
 
     info!(
         node_id,
         width,
         height,
-        fd = dup_fd,
+        fd = fd_raw,
         "Portal flow completed successfully"
     );
 
     Ok(PortalResult {
-        fd: dup_fd,
+        fd: fd_raw,
         node_id,
         width,
         height,
         close_tx,
+        done_rx,
     })
 }
 
@@ -260,6 +272,7 @@ impl PortalCapture {
                 width: info.width,
                 height: info.height,
                 close_tx: Some(info.close_tx),
+                done_rx: Some(info.done_rx),
             })),
             Err(CaptureError::UserCancelled) => Ok(None),
             Err(e) => Err(e.into()),

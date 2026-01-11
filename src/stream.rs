@@ -103,7 +103,9 @@ impl CaptureStream {
         height: u32,
         capture_interval: f64,
     ) -> PyResult<Self> {
-        let owned_fd = duplicate_fd(fd)?;
+        // Take direct ownership of the fd (no dup).
+        // The caller (PortalSession) used into_raw_fd() so there's no other owner.
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
         debug!(
             fd,
@@ -241,19 +243,6 @@ impl Drop for CaptureStream {
             }
         }
     }
-}
-
-/// Duplicate a file descriptor.
-fn duplicate_fd(fd: i32) -> PyResult<OwnedFd> {
-    let dup_fd = unsafe { libc::dup(fd) };
-    if dup_fd < 0 {
-        return Err(CaptureError::PipeWire(format!(
-            "Failed to duplicate fd: {}",
-            std::io::Error::last_os_error()
-        ))
-        .into());
-    }
-    Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
 }
 
 /// Main function for the PipeWire thread.
