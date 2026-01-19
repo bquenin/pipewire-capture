@@ -117,11 +117,9 @@ impl CaptureStream {
             node_id,
             capture_interval,
             running: false,
-            shared: Arc::new(Mutex::new(SharedState {
-                width,
-                height,
-                ..SharedState::default()
-            })),
+            // Don't use portal dimensions - they may be invalid (e.g., 1x1 on Niri).
+            // Wait for on_param_changed to provide actual negotiated dimensions.
+            shared: Arc::new(Mutex::new(SharedState::default())),
             thread_handle: None,
             command_tx: None,
         })
@@ -474,6 +472,9 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
                 if let Some(ml) = data.weak_mainloop.upgrade() {
                     ml.quit();
                 }
+            } else {
+                // Stream went to Unconnected without ever streaming - likely a negotiation failure
+                warn!(?old, "Stream disconnected before streaming started (possible negotiation failure)");
             }
         }
         StreamState::Streaming => {
@@ -517,11 +518,11 @@ fn on_param_changed(
         video_info
     };
 
-    debug!(
+    info!(
         width = info.size.width,
         height = info.size.height,
         format = info.format,
-        "Video format negotiated"
+        "Video format negotiated with PipeWire"
     );
 
     {

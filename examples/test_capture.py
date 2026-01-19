@@ -2,7 +2,10 @@
 """Test the full capture flow: portal selection + frame capture."""
 
 import time
-from pipewire_capture import PortalCapture, CaptureStream, is_available
+from pipewire_capture import PortalCapture, CaptureStream, is_available, init_logging
+
+# Enable debug logging for troubleshooting
+init_logging("debug")
 
 print(f"PipeWire capture available: {is_available()}")
 
@@ -21,14 +24,13 @@ if not info:
     print("\nNo stream info - selection was cancelled.")
     exit(1)
 
-fd, node_id, width, height = info
-print(f"  File descriptor: {fd}")
-print(f"  Node ID: {node_id}")
-print(f"  Window size: {width}x{height}")
+print(f"  File descriptor: {info.fd}")
+print(f"  Node ID: {info.node_id}")
+print(f"  Window size: {info.width}x{info.height}")
 
 # Step 2: Create and start capture stream
 print("\nStarting capture stream...")
-stream = CaptureStream(fd, node_id, width, height, capture_interval=0.1)
+stream = CaptureStream(info.fd, info.node_id, info.width, info.height, capture_interval=0.1)
 stream.start()
 
 # Step 3: Capture frames for 5 seconds
