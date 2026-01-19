@@ -36,12 +36,15 @@ cargo test
 
 **NEVER commit directly to `main`. All changes go through PRs.**
 
+**NEVER merge PRs with failed CI checks. Wait for CI to pass before merging.**
+
 ```bash
 git checkout -b issue-N-description
 # make changes
 git push -u origin issue-N-description
 gh pr create
-gh pr merge --squash  # after CI passes
+# Wait for CI to pass, then merge
+gh pr merge --squash
 ```
 
 ## Code Style
