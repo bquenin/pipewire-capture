@@ -44,12 +44,26 @@ fn init_logging(level: &str) {
 
 /// Check if PipeWire capture is available on this system.
 ///
-/// Returns True if running on Wayland with xdg-desktop-portal support.
+/// Returns True if the ScreenCast portal is available via D-Bus.
+/// This works on Wayland compositors including Gamescope (Steam Deck).
 #[pyfunction]
 fn is_available() -> bool {
-    // Check for WAYLAND_DISPLAY environment variable
-    std::env::var("WAYLAND_DISPLAY").is_ok()
-    // TODO: Also check for portal availability via D-Bus
+    // Check if ScreenCast portal is available via D-Bus introspection
+    let Ok(conn) = zbus::blocking::Connection::session() else {
+        return false;
+    };
+
+    conn.call_method(
+        Some("org.freedesktop.portal.Desktop"),
+        "/org/freedesktop/portal/desktop",
+        Some("org.freedesktop.DBus.Introspectable"),
+        "Introspect",
+        &(),
+    )
+    .ok()
+    .and_then(|reply| reply.body().deserialize::<String>().ok())
+    .map(|xml| xml.contains("org.freedesktop.portal.ScreenCast"))
+    .unwrap_or(false)
 }
 
 /// Python module definition.
@@ -67,31 +81,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
-    // Note: These tests modify environment variables, so they must run serially.
-    // We combine them into one test to avoid race conditions.
     #[test]
-    fn test_is_available() {
-        // Save original value
-        let original = std::env::var("WAYLAND_DISPLAY").ok();
-
-        // Test without WAYLAND_DISPLAY
-        std::env::remove_var("WAYLAND_DISPLAY");
-        assert!(
-            !is_available(),
-            "Should return false when WAYLAND_DISPLAY is not set"
-        );
-
-        // Test with WAYLAND_DISPLAY
-        std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
-        assert!(
-            is_available(),
-            "Should return true when WAYLAND_DISPLAY is set"
-        );
-
-        // Restore original value
-        match original {
-            Some(val) => std::env::set_var("WAYLAND_DISPLAY", val),
-            None => std::env::remove_var("WAYLAND_DISPLAY"),
-        }
+    fn test_is_available_does_not_panic() {
+        // is_available() checks D-Bus for ScreenCast portal availability.
+        // We can't easily mock D-Bus, so just verify it doesn't panic.
+        // On systems with xdg-desktop-portal, this returns true.
+        // On systems without D-Bus session bus, this returns false.
+        let _result = is_available();
     }
 }
