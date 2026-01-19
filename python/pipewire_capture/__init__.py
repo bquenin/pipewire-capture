@@ -32,6 +32,7 @@ from pipewire_capture._native import (
     CaptureStream,
     PortalCapture,
     PortalSession,
+    init_logging,
     is_available,
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "PortalCapture",
     "PortalSession",
     "CaptureStream",
+    "init_logging",
     "is_available",
 ]
 

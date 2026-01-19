@@ -2,7 +2,10 @@
 """Test the full capture flow: portal selection + frame capture."""
 
 import time
-from pipewire_capture import PortalCapture, CaptureStream, is_available
+from pipewire_capture import PortalCapture, CaptureStream, is_available, init_logging
+
+# Enable debug logging for troubleshooting
+init_logging("debug")
 
 print(f"PipeWire capture available: {is_available()}")
 

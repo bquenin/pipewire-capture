@@ -35,8 +35,6 @@ struct SharedState {
     window_closed: bool,
     /// Last capture timestamp for throttling.
     last_capture_time: Instant,
-    /// Whether first frame has been received (for logging).
-    first_frame_logged: bool,
 }
 
 impl Default for SharedState {
@@ -48,7 +46,6 @@ impl Default for SharedState {
             stream_ended: false,
             window_closed: false,
             last_capture_time: Instant::now(),
-            first_frame_logged: false,
         }
     }
 }
@@ -114,16 +111,6 @@ impl CaptureStream {
             fd,
             node_id, width, height, capture_interval, "Creating CaptureStream"
         );
-
-        // Warn about invalid portal dimensions - some compositors (e.g., Niri) return
-        // placeholder values like 1x1. We ignore portal dimensions and wait for
-        // PipeWire format negotiation to provide the actual stream dimensions.
-        if width <= 1 || height <= 1 {
-            warn!(
-                width,
-                height, "Portal returned invalid dimensions, will use negotiated format"
-            );
-        }
 
         Ok(Self {
             fd: Some(owned_fd),
@@ -487,7 +474,7 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
                 }
             } else {
                 // Stream went to Unconnected without ever streaming - likely a negotiation failure
-                debug!(?old, "Stream became unconnected before streaming started");
+                warn!(?old, "Stream disconnected before streaming started (possible negotiation failure)");
             }
         }
         StreamState::Streaming => {
@@ -618,16 +605,6 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
                         std::slice::from_raw_parts(first_data.data.add(offset) as *const u8, size)
                     };
                     let mut shared = data.shared.lock();
-                    // Log first successful frame capture for debugging
-                    if !shared.first_frame_logged {
-                        info!(
-                            width = shared.width,
-                            height = shared.height,
-                            size,
-                            "First frame received from PipeWire"
-                        );
-                        shared.first_frame_logged = true;
-                    }
                     shared.frame_buffer = Some(frame_slice.to_vec());
                     shared.last_capture_time = now;
                 }
