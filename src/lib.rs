@@ -7,7 +7,7 @@
 #![allow(clippy::useless_conversion)]
 
 use pyo3::prelude::*;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 use tracing_subscriber::EnvFilter;
 
 mod error;
@@ -19,6 +19,7 @@ pub use portal::{PortalCapture, PortalSession};
 pub use stream::CaptureStream;
 
 static LOGGING_INIT: Once = Once::new();
+static AVAILABILITY_CACHE: OnceLock<bool> = OnceLock::new();
 
 /// Initialize logging for the pipewire-capture library.
 ///
@@ -46,9 +47,15 @@ fn init_logging(level: &str) {
 ///
 /// Returns True if the ScreenCast portal is available via D-Bus.
 /// This works on Wayland compositors including Gamescope (Steam Deck).
+///
+/// The result is cached since portal availability doesn't change during process lifetime.
 #[pyfunction]
 fn is_available() -> bool {
-    // Check if ScreenCast portal is available via D-Bus introspection
+    *AVAILABILITY_CACHE.get_or_init(check_screencast_portal)
+}
+
+/// Check if ScreenCast portal is available via D-Bus introspection.
+fn check_screencast_portal() -> bool {
     let Ok(conn) = zbus::blocking::Connection::session() else {
         return false;
     };
