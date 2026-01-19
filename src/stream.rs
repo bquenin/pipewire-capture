@@ -474,7 +474,10 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
                 }
             } else {
                 // Stream went to Unconnected without ever streaming - likely a negotiation failure
-                warn!(?old, "Stream disconnected before streaming started (possible negotiation failure)");
+                warn!(
+                    ?old,
+                    "Stream disconnected before streaming started (possible negotiation failure)"
+                );
             }
         }
         StreamState::Streaming => {
