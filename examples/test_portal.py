@@ -16,10 +16,9 @@ info = portal.select_window()
 print(f"Stream info: {info}")
 
 if info:
-    fd, node_id, width, height = info
-    print(f"  File descriptor: {fd}")
-    print(f"  Node ID: {node_id}")
-    print(f"  Window size: {width}x{height}")
+    print(f"  File descriptor: {info.fd}")
+    print(f"  Node ID: {info.node_id}")
+    print(f"  Window size: {info.width}x{info.height}")
     print("\nSuccess! Portal integration is working.")
 else:
     print("\nNo stream info - selection was cancelled.")
