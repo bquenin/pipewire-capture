@@ -42,7 +42,8 @@ while time.time() - start_time < 5 and not stream.window_invalid:
     frame = stream.get_frame()
     if frame is not None:
         frame_count += 1
-        print(f"  Frame {frame_count}: shape={frame.shape}, dtype={frame.dtype}")
+        non_zero = frame.any()
+        print(f"  Frame {frame_count}: shape={frame.shape}, dtype={frame.dtype}, has_content={non_zero}")
     time.sleep(0.1)
 
 # Step 4: Stop and cleanup

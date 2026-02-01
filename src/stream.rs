@@ -45,7 +45,8 @@ impl Default for SharedState {
             height: 0,
             stream_ended: false,
             window_closed: false,
-            last_capture_time: Instant::now(),
+            // Start in the past so the first frame is never throttled
+            last_capture_time: Instant::now() - std::time::Duration::from_secs(1),
         }
     }
 }
@@ -542,12 +543,14 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
     // Use raw buffer API to access spa_buffer
     let pw_buffer = unsafe { stream.dequeue_raw_buffer() };
     if pw_buffer.is_null() {
+        debug!("dequeue_raw_buffer returned null");
         return;
     }
 
     // Get the spa_buffer from pw_buffer
     let spa_buffer = unsafe { (*pw_buffer).buffer };
     if spa_buffer.is_null() {
+        debug!("spa_buffer is null");
         unsafe { stream.queue_raw_buffer(pw_buffer) };
         return;
     }
@@ -559,6 +562,7 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
     };
 
     if !should_capture {
+        debug!("throttled, skipping frame");
         unsafe { stream.queue_raw_buffer(pw_buffer) };
         return;
     }
@@ -566,12 +570,14 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
     // Get buffer data array
     let n_datas = unsafe { (*spa_buffer).n_datas };
     if n_datas == 0 {
+        debug!("spa_buffer has no data planes (n_datas=0)");
         unsafe { stream.queue_raw_buffer(pw_buffer) };
         return;
     }
 
     let datas_ptr = unsafe { (*spa_buffer).datas };
     if datas_ptr.is_null() {
+        debug!("spa_buffer datas pointer is null");
         unsafe { stream.queue_raw_buffer(pw_buffer) };
         return;
     }
@@ -599,7 +605,14 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
     match data_type {
         SPA_DATA_MEMPTR => {
             // Memory-mapped buffer - direct access
-            if !first_data.data.is_null() && !first_data.chunk.is_null() {
+            let data_null = first_data.data.is_null();
+            let chunk_null = first_data.chunk.is_null();
+            if data_null || chunk_null {
+                debug!(
+                    data_null,
+                    chunk_null, "MEMPTR buffer has null data or chunk pointer"
+                );
+            } else {
                 let chunk = unsafe { &*first_data.chunk };
                 let size = chunk.size as usize;
                 let offset = chunk.offset as usize;
@@ -610,6 +623,8 @@ fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
                     let mut shared = data.shared.lock();
                     shared.frame_buffer = Some(frame_slice.to_vec());
                     shared.last_capture_time = now;
+                } else {
+                    debug!(size, offset, "MEMPTR buffer has zero size");
                 }
             }
         }
