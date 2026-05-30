@@ -128,13 +128,13 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
         .await
         .map_err(|e| CaptureError::SessionFailed(e.to_string()))?;
 
-    // 3. Select sources (window only)
-    debug!("Selecting sources (window only)");
+    // 3. Select sources
+    debug!("Selecting sources");
     screencast
         .select_sources(
             &session,
             CursorMode::Embedded,
-            SourceType::Window.into(),
+            (SourceType::Monitor | SourceType::Window),
             false, // single selection
             None,  // no restore token
             PersistMode::DoNot,
