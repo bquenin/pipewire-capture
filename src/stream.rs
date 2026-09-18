@@ -3,6 +3,7 @@
 //! This module handles capturing video frames from a PipeWire stream.
 
 use crate::error::CaptureError;
+use crate::frame::{copy_frame, FrameFormat};
 use numpy::{PyArray3, PyArrayMethods};
 use parking_lot::Mutex;
 use pipewire::{
@@ -12,7 +13,7 @@ use pipewire::{
     spa::sys as spa_sys,
     stream::{Stream, StreamFlags, StreamListener, StreamRef, StreamState},
 };
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyValueError, prelude::*};
 use std::{
     os::fd::{FromRawFd, OwnedFd},
     sync::{mpsc, Arc},
@@ -22,32 +23,44 @@ use std::{
 use tracing::{debug, error, info, warn};
 
 /// Shared state between Python thread and PipeWire thread.
+#[derive(Default)]
 struct SharedState {
     /// Latest frame data (BGRA, height * width * 4 bytes).
     frame_buffer: Option<Vec<u8>>,
-    /// Frame width in pixels.
-    width: u32,
-    /// Frame height in pixels.
-    height: u32,
+    /// Format negotiated with PipeWire, independent of portal size hints.
+    format: Option<FrameFormat>,
     /// Stream has ended (window closed, error, or user stop).
     stream_ended: bool,
-    /// Window was closed by the user.
-    window_closed: bool,
     /// Last capture timestamp for throttling.
-    last_capture_time: Instant,
+    last_capture_time: Option<Instant>,
+    /// Failure reported by the capture thread.
+    error: Option<String>,
 }
 
-impl Default for SharedState {
-    fn default() -> Self {
-        Self {
-            frame_buffer: None,
-            width: 0,
-            height: 0,
-            stream_ended: false,
-            window_closed: false,
-            // Start in the past so the first frame is never throttled
-            last_capture_time: Instant::now() - std::time::Duration::from_secs(1),
-        }
+impl SharedState {
+    fn fail(&mut self, message: String) {
+        self.error = Some(message);
+        self.stream_ended = true;
+        self.frame_buffer = None;
+    }
+
+    fn set_format(&mut self, format: Option<FrameFormat>) {
+        // A resize must never pair a frame from the old format with new dimensions.
+        self.frame_buffer = None;
+        self.format = format;
+        self.last_capture_time = None;
+    }
+}
+
+fn duplicate_fd(fd: i32) -> std::io::Result<OwnedFd> {
+    // fcntl validates the integer before constructing an OwnedFd. BorrowedFd's
+    // unsafe constructor would require callers to have supplied a valid fd.
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        // SAFETY: fcntl returned a new, independently owned descriptor.
+        Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
     }
 }
 
@@ -90,10 +103,10 @@ impl CaptureStream {
     /// Create a new capture stream.
     ///
     /// Args:
-    ///     fd: PipeWire file descriptor from portal.
+    ///     fd: Borrowed PipeWire descriptor; the stream owns a duplicate.
     ///     node_id: PipeWire node ID for the stream.
-    ///     width: Initial width from portal (used if format negotiation doesn't provide it).
-    ///     height: Initial height from portal (used if format negotiation doesn't provide it).
+    ///     width: Portal size hint (actual dimensions are negotiated with PipeWire).
+    ///     height: Portal size hint (actual dimensions are negotiated with PipeWire).
     ///     capture_interval: Target interval between frames in seconds.
     #[new]
     #[pyo3(signature = (fd, node_id, width, height, capture_interval=0.25))]
@@ -104,9 +117,12 @@ impl CaptureStream {
         height: u32,
         capture_interval: f64,
     ) -> PyResult<Self> {
-        // Take direct ownership of the fd (no dup).
-        // The caller (PortalSession) used into_raw_fd() so there's no other owner.
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        if !capture_interval.is_finite() || capture_interval < 0.0 {
+            return Err(PyValueError::new_err(
+                "capture_interval must be finite and non-negative",
+            ));
+        }
+        let owned_fd = duplicate_fd(fd)?;
 
         debug!(
             fd,
@@ -168,14 +184,16 @@ impl CaptureStream {
         }
 
         // Release GIL while waiting for lock
-        let (frame_data, width, height) = py.allow_threads(|| {
+        let (frame_data, format) = py.allow_threads(|| {
             let shared = self.shared.lock();
-            (shared.frame_buffer.clone(), shared.width, shared.height)
+            (shared.frame_buffer.clone(), shared.format)
         });
 
-        match frame_data {
-            Some(data) if width > 0 && height > 0 => {
-                let expected = (height * width * 4) as usize;
+        match (frame_data, format) {
+            (Some(data), Some(format)) => {
+                let expected = format
+                    .frame_len()
+                    .ok_or_else(|| CaptureError::PipeWire("Video frame size overflow".into()))?;
                 if data.len() != expected {
                     return Err(CaptureError::FrameSizeMismatch {
                         expected,
@@ -186,21 +204,29 @@ impl CaptureStream {
 
                 // Create numpy array with shape (height, width, 4)
                 let array = numpy::PyArray1::from_vec_bound(py, data);
-                let array = array.reshape([height as usize, width as usize, 4])?;
+                let array = array.reshape([format.height as usize, format.width as usize, 4])?;
                 Ok(Some(array))
             }
             _ => Ok(None),
         }
     }
 
-    /// Check if the captured window has been closed.
+    /// Check if capture has ended, including connection or negotiation failure.
     #[getter]
     pub fn window_invalid(&self) -> bool {
-        self.shared.lock().window_closed
+        self.shared.lock().stream_ended
+    }
+
+    /// Error from the capture thread, or None for a normal stop/window close.
+    #[getter]
+    pub fn error(&self) -> Option<String> {
+        self.shared.lock().error.clone()
     }
 
     /// Stop capturing and release resources.
     pub fn stop(&mut self) -> PyResult<()> {
+        // Also release resources if start() was never called.
+        self.fd.take();
         if !self.running {
             return Ok(());
         }
@@ -224,6 +250,7 @@ impl CaptureStream {
         }
 
         self.running = false;
+        self.shared.lock().frame_buffer = None;
         info!("Capture stream stopped");
         Ok(())
     }
@@ -261,7 +288,9 @@ fn pipewire_thread(
         Ok(ml) => ml,
         Err(e) => {
             error!("Failed to create PipeWire main loop: {}", e);
-            shared.lock().stream_ended = true;
+            shared
+                .lock()
+                .fail(format!("Failed to create PipeWire main loop: {e}"));
             return;
         }
     };
@@ -270,7 +299,9 @@ fn pipewire_thread(
         Ok(ctx) => ctx,
         Err(e) => {
             error!("Failed to create PipeWire context: {}", e);
-            shared.lock().stream_ended = true;
+            shared
+                .lock()
+                .fail(format!("Failed to create PipeWire context: {e}"));
             return;
         }
     };
@@ -279,12 +310,28 @@ fn pipewire_thread(
         Ok(c) => c,
         Err(e) => {
             error!("Failed to connect to PipeWire via fd: {}", e);
-            shared.lock().stream_ended = true;
+            shared
+                .lock()
+                .fail(format!("Failed to connect to PipeWire: {e}"));
             return;
         }
     };
 
     info!(node_id, "Connected to PipeWire");
+
+    // Core failures (for example a disconnected server) need not produce a
+    // stream state change. Preserve the reason for the Python caller.
+    let error_shared = Arc::clone(&shared);
+    let weak_ml = mainloop.downgrade();
+    let _core_listener = core
+        .add_listener_local()
+        .error(move |_id, _seq, _res, message| {
+            error_shared.lock().fail(message.to_string());
+            if let Some(ml) = weak_ml.upgrade() {
+                ml.quit();
+            }
+        })
+        .register();
 
     // Setup stream
     let result = setup_stream(
@@ -299,15 +346,18 @@ fn pipewire_thread(
         Ok(s) => s,
         Err(e) => {
             error!("Failed to setup stream: {}", e);
-            shared.lock().stream_ended = true;
+            shared
+                .lock()
+                .fail(format!("Failed to set up PipeWire stream: {e}"));
             return;
         }
     };
 
     // Add timer to check for stop commands
     let weak_ml = mainloop.downgrade();
+    let stop_shared = Arc::clone(&shared);
     let timer_callback = move |_expirations: u64| {
-        if command_rx.try_recv().is_ok() {
+        if command_rx.try_recv().is_ok() || stop_shared.lock().stream_ended {
             debug!("Received stop command");
             if let Some(ml) = weak_ml.upgrade() {
                 ml.quit();
@@ -324,7 +374,9 @@ fn pipewire_thread(
     mainloop.run();
     debug!("PipeWire main loop exited");
 
-    shared.lock().stream_ended = true;
+    let mut shared = shared.lock();
+    shared.stream_ended = true;
+    shared.frame_buffer = None;
 }
 
 /// Setup the PipeWire stream with callbacks.
@@ -456,9 +508,7 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
     match &new {
         StreamState::Error(msg) => {
             error!("Stream error: {}", msg);
-            let mut shared = data.shared.lock();
-            shared.stream_ended = true;
-            shared.window_closed = true;
+            data.shared.lock().fail(msg.to_string());
             if let Some(ml) = data.weak_mainloop.upgrade() {
                 ml.quit();
             }
@@ -469,7 +519,7 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
                 info!("Stream disconnected (window closed)");
                 let mut shared = data.shared.lock();
                 shared.stream_ended = true;
-                shared.window_closed = true;
+                shared.frame_buffer = None;
                 if let Some(ml) = data.weak_mainloop.upgrade() {
                     ml.quit();
                 }
@@ -479,6 +529,12 @@ fn on_state_changed(data: &mut StreamUserData, old: StreamState, new: StreamStat
                     ?old,
                     "Stream disconnected before streaming started (possible negotiation failure)"
                 );
+                data.shared
+                    .lock()
+                    .fail("Stream disconnected before capture started".into());
+                if let Some(ml) = data.weak_mainloop.upgrade() {
+                    ml.quit();
+                }
             }
         }
         StreamState::Streaming => {
@@ -507,6 +563,7 @@ fn on_param_changed(
         return;
     }
 
+    data.shared.lock().set_format(None);
     let Some(param) = param else {
         return;
     };
@@ -516,7 +573,9 @@ fn on_param_changed(
         let mut video_info: spa_sys::spa_video_info_raw = std::mem::zeroed();
         let result = spa_sys::spa_format_video_raw_parse(param.as_raw_ptr(), &mut video_info);
         if result < 0 {
-            warn!("Failed to parse video format");
+            data.shared
+                .lock()
+                .fail("Failed to parse video format".into());
             return;
         }
         video_info
@@ -530,118 +589,115 @@ fn on_param_changed(
     );
 
     {
-        let mut shared = data.shared.lock();
-        shared.width = info.size.width;
-        shared.height = info.size.height;
+        data.shared.lock().set_format(Some(FrameFormat {
+            width: info.size.width,
+            height: info.size.height,
+            pixel_format: info.format,
+        }));
     }
 }
 
 /// Process incoming video frames.
 fn on_process(stream: &StreamRef, data: &mut StreamUserData) {
+    // The RAII guard returns the buffer on every path, including dropped frames.
+    let Some(mut buffer) = stream.dequeue_buffer() else {
+        return;
+    };
     let now = Instant::now();
-
-    // Use raw buffer API to access spa_buffer
-    let pw_buffer = unsafe { stream.dequeue_raw_buffer() };
-    if pw_buffer.is_null() {
-        debug!("dequeue_raw_buffer returned null");
-        return;
-    }
-
-    // Get the spa_buffer from pw_buffer
-    let spa_buffer = unsafe { (*pw_buffer).buffer };
-    if spa_buffer.is_null() {
-        debug!("spa_buffer is null");
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
-        return;
-    }
-
-    // Check throttling
-    let should_capture = {
+    let format = {
         let shared = data.shared.lock();
-        now.duration_since(shared.last_capture_time).as_secs_f64() >= data.capture_interval
+        if shared.stream_ended
+            || shared
+                .last_capture_time
+                .is_some_and(|last| now.duration_since(last).as_secs_f64() < data.capture_interval)
+        {
+            return;
+        }
+        shared.format
     };
-
-    if !should_capture {
-        debug!("throttled, skipping frame");
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
+    let Some(format) = format else {
         return;
-    }
-
-    // Get buffer data array
-    let n_datas = unsafe { (*spa_buffer).n_datas };
-    if n_datas == 0 {
-        debug!("spa_buffer has no data planes (n_datas=0)");
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
-        return;
-    }
-
-    let datas_ptr = unsafe { (*spa_buffer).datas };
-    if datas_ptr.is_null() {
-        debug!("spa_buffer datas pointer is null");
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
-        return;
-    }
-
-    // Get dimensions from shared state
-    let (width, height) = {
-        let shared = data.shared.lock();
-        (shared.width, shared.height)
     };
-
-    if width == 0 || height == 0 {
-        warn!("Frame dimensions not yet known");
-        unsafe { stream.queue_raw_buffer(pw_buffer) };
+    let Some(first_data) = buffer.datas_mut().first() else {
+        return;
+    };
+    let raw = first_data.as_raw();
+    // MAP_BUFFERS maps MemFd memory but does not change its data type.
+    if !matches!(
+        raw.type_,
+        spa_sys::SPA_DATA_MemPtr | spa_sys::SPA_DATA_MemFd
+    ) {
+        data.shared.lock().fail(format!(
+            "Unsupported PipeWire buffer type {}: CPU-mapped MemPtr or MemFd is required",
+            raw.type_
+        ));
         return;
     }
-
-    // Check buffer type
-    let first_data = unsafe { &*datas_ptr };
-    let data_type = first_data.type_;
-
-    // SPA_DATA_MemPtr = 2, SPA_DATA_DmaBuf = 3
-    const SPA_DATA_MEMPTR: u32 = 2;
-    const SPA_DATA_DMABUF: u32 = 3;
-
-    match data_type {
-        SPA_DATA_MEMPTR => {
-            // Memory-mapped buffer - direct access
-            let data_null = first_data.data.is_null();
-            let chunk_null = first_data.chunk.is_null();
-            if data_null || chunk_null {
-                debug!(
-                    data_null,
-                    chunk_null, "MEMPTR buffer has null data or chunk pointer"
-                );
-            } else {
-                let chunk = unsafe { &*first_data.chunk };
-                let size = chunk.size as usize;
-                let offset = chunk.offset as usize;
-                if size > 0 {
-                    let frame_slice = unsafe {
-                        std::slice::from_raw_parts(first_data.data.add(offset) as *const u8, size)
-                    };
-                    let mut shared = data.shared.lock();
-                    shared.frame_buffer = Some(frame_slice.to_vec());
-                    shared.last_capture_time = now;
-                } else {
-                    debug!(size, offset, "MEMPTR buffer has zero size");
-                }
-            }
+    if raw.data.is_null() || raw.chunk.is_null() || raw.maxsize == 0 {
+        return;
+    }
+    // SAFETY: PipeWire owns this mapped allocation for the lifetime of the
+    // dequeued buffer. Bound the slice by maxsize, never by unvalidated chunk
+    // metadata. copy_frame validates offset, size and stride before reading.
+    let memory = unsafe { std::slice::from_raw_parts(raw.data.cast::<u8>(), raw.maxsize as usize) };
+    let chunk = unsafe { &*raw.chunk };
+    match copy_frame(memory, chunk, format) {
+        Ok(Some(frame)) => {
+            let mut shared = data.shared.lock();
+            shared.frame_buffer = Some(frame);
+            shared.last_capture_time = Some(now);
         }
-        SPA_DATA_DMABUF => {
-            // DmaBuf not supported - we request MAP_BUFFERS which should give us MemPtr
-            error!(
-                "Received DmaBuf buffer (type={}), but only MemPtr is supported. \
-                 This may indicate an old PipeWire/compositor version. \
-                 Please ensure you have PipeWire 0.3.30+ and a modern compositor (GNOME 3.36+, KDE 5.20+).",
-                data_type
-            );
-        }
-        _ => {
-            warn!("Unknown buffer type: {}", data_type);
-        }
+        Ok(None) => {}
+        Err(message) => warn!(message, "Dropping invalid video frame"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn duplicated_descriptor_does_not_close_the_callers_descriptor() {
+        let original = std::fs::File::open("/dev/null").unwrap();
+        let duplicate = duplicate_fd(original.as_raw_fd()).unwrap();
+        assert_ne!(duplicate.as_raw_fd(), original.as_raw_fd());
+        drop(duplicate);
+        assert!(original.metadata().is_ok());
+        assert!(duplicate_fd(-1).is_err());
     }
 
-    // Queue buffer back to PipeWire
-    unsafe { stream.queue_raw_buffer(pw_buffer) };
+    #[test]
+    fn renegotiation_discards_previous_frame_and_throttle() {
+        let mut state = SharedState {
+            frame_buffer: Some(vec![0; 8]),
+            format: Some(FrameFormat {
+                width: 2,
+                height: 1,
+                pixel_format: spa_sys::SPA_VIDEO_FORMAT_BGRA,
+            }),
+            last_capture_time: Some(Instant::now()),
+            ..SharedState::default()
+        };
+        state.set_format(Some(FrameFormat {
+            width: 1,
+            height: 1,
+            pixel_format: spa_sys::SPA_VIDEO_FORMAT_RGBA,
+        }));
+        assert!(state.frame_buffer.is_none());
+        assert!(state.last_capture_time.is_none());
+        assert_eq!(state.format.unwrap().width, 1);
+    }
+
+    #[test]
+    fn capture_failure_ends_stream_without_leaving_a_stale_frame() {
+        let mut state = SharedState {
+            frame_buffer: Some(vec![0; 4]),
+            ..SharedState::default()
+        };
+        state.fail("Connection refused".into());
+        assert!(state.stream_ended);
+        assert!(state.frame_buffer.is_none());
+        assert_eq!(state.error.as_deref(), Some("Connection refused"));
+    }
 }

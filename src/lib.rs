@@ -11,6 +11,7 @@ use std::sync::{Once, OnceLock};
 use tracing_subscriber::EnvFilter;
 
 mod error;
+mod frame;
 mod portal;
 mod stream;
 
@@ -36,10 +37,11 @@ fn init_logging(level: &str) {
     LOGGING_INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(format!("pipewire_capture={}", level)));
-        tracing_subscriber::fmt()
+        // Another extension may already have installed the global subscriber.
+        let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(false)
-            .init();
+            .try_init();
     });
 }
 
@@ -76,6 +78,10 @@ fn check_screencast_portal() -> bool {
 /// Python module definition.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add(
+        "UnsupportedCompositorError",
+        m.py().get_type_bound::<error::UnsupportedCompositorError>(),
+    )?;
     m.add_function(wrap_pyfunction!(is_available, m)?)?;
     m.add_function(wrap_pyfunction!(init_logging, m)?)?;
     m.add_class::<PortalCapture>()?;

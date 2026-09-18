@@ -32,6 +32,7 @@ from pipewire_capture._native import (
     CaptureStream,
     PortalCapture,
     PortalSession,
+    UnsupportedCompositorError,
     init_logging,
     is_available,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "PortalCapture",
     "PortalSession",
     "CaptureStream",
+    "UnsupportedCompositorError",
     "init_logging",
     "is_available",
 ]
