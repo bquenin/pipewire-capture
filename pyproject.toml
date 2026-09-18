@@ -43,4 +43,5 @@ module-name = "pipewire_capture._native"
 [dependency-groups]
 dev = [
     "maturin>=1.11.5",
+    "dbus-next>=0.2.3",
 ]

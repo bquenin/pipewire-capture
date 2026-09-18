@@ -4,6 +4,18 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use thiserror::Error;
 
+// PyO3 0.22's exception macro checks its legacy gil-refs feature in this crate.
+#[allow(unexpected_cfgs)]
+mod python_errors {
+    pyo3::create_exception!(
+        pipewire_capture,
+        UnsupportedCompositorError,
+        pyo3::exceptions::PyRuntimeError,
+        "KWin's current compositing backend cannot provide a screen capture stream."
+    );
+}
+pub use python_errors::UnsupportedCompositorError;
+
 /// Errors that can occur during capture operations.
 #[derive(Error, Debug)]
 pub enum CaptureError {
@@ -12,6 +24,23 @@ pub enum CaptureError {
 
     #[error("Session creation failed: {0}")]
     SessionFailed(String),
+
+    #[error("Portal {stage} failed: {source}")]
+    PortalFailed {
+        stage: &'static str,
+        source: ashpd::Error,
+    },
+
+    #[error(
+        "KDE screen capture requires OpenGL compositing; KWin reports '{backend}'. \
+         Update KDE and your graphics drivers, then log out and back in. \
+         If the problem persists, check KWin's logs or use an X11 desktop session.\n\
+         Portal Start failed: {source}"
+    )]
+    UnsupportedCompositor {
+        backend: String,
+        source: ashpd::Error,
+    },
 
     #[error("User cancelled window selection")]
     UserCancelled,
@@ -37,7 +66,12 @@ pub enum CaptureError {
 
 impl From<CaptureError> for PyErr {
     fn from(err: CaptureError) -> PyErr {
-        PyRuntimeError::new_err(err.to_string())
+        match err {
+            CaptureError::UnsupportedCompositor { .. } => {
+                UnsupportedCompositorError::new_err(err.to_string())
+            }
+            _ => PyRuntimeError::new_err(err.to_string()),
+        }
     }
 }
 

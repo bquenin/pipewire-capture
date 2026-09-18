@@ -1,6 +1,6 @@
 [package]
 name = "pipewire-capture"
-version = "0.2.9"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "Python library for PipeWire video capture with pre-built wheels"
@@ -17,7 +17,7 @@ numpy = "0.22"
 pipewire = "0.8"
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 zbus = { version = "5", default-features = false, features = ["blocking-api"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
 parking_lot = "0.12"
 thiserror = "2"
 tracing = "0.1"
