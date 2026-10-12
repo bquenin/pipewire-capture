@@ -39,6 +39,7 @@ class MockPortal:
         self.pending_start = None
         self.hold_start = False
         self.start_received = threading.Event()
+        self.source_types = None
 
     async def connect(self):
         self.bus = await MessageBus(bus_address=self.address, negotiate_unix_fd=True).connect()
@@ -92,6 +93,7 @@ class MockPortal:
             session = f"/org/freedesktop/portal/desktop/session/{sender}/{options['session_handle_token'].value}"
             self.respond(message, options, {"session_handle": Variant("s", session)})
         elif member == "SelectSources":
+            self.source_types = message.body[-1]["types"].value
             self.respond(message, message.body[-1], {})
         elif member == "Start":
             options = message.body[-1]
@@ -144,6 +146,15 @@ class PortalTests(unittest.TestCase):
 
     def setUp(self):
         self.mock.reset()
+
+    def test_selects_requested_source_type(self):
+        window = PortalCapture().select_window()
+        self.assertEqual(self.mock.source_types, 2)
+        window.close()
+
+        monitor = PortalCapture().select_monitor()
+        self.assertEqual(self.mock.source_types, 1)
+        monitor.close()
 
     def test_select_sources_failure_is_not_ignored_and_closes_session(self):
         self.mock.fail_stage = "SelectSources"

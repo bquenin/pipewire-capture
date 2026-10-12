@@ -70,6 +70,7 @@ Check whether the ScreenCast portal interface exists on the session bus. The res
 Handles window selection via xdg-desktop-portal.
 
 - `select_window()` - Show the window picker synchronously. Returns a `PortalSession`, or `None` if cancelled. Raises `RuntimeError` on failure, including the failing portal step.
+- `select_monitor()` - Show the monitor picker synchronously. Returns a `PortalSession`, or `None` if cancelled.
 
 ### `PortalSession`
 

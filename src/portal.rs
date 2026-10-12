@@ -186,8 +186,8 @@ async fn diagnose_portal_error(error: CaptureError) -> CaptureError {
     error
 }
 
-/// Run the async portal flow to select a window.
-async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
+/// Run the async portal flow to select a capture source.
+async fn run_portal_flow(source_type: SourceType) -> Result<PortalResult, CaptureError> {
     debug!("Starting portal flow");
 
     // 1. Create screencast proxy
@@ -206,12 +206,12 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
     // Keep ownership of the session until every setup step succeeds, so all
     // errors (including user cancellation) close it explicitly.
     let result = async {
-        debug!("Selecting sources (window only)");
+        debug!(?source_type, "Selecting sources");
         let request = screencast
             .select_sources(
                 &session,
                 CursorMode::Embedded,
-                SourceType::Window.into(),
+                source_type.into(),
                 false,
                 None,
                 PersistMode::DoNot,
@@ -222,7 +222,7 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
             .response()
             .map_err(|e| portal_error("SelectSources", e))?;
 
-        debug!("Starting window picker");
+        debug!("Starting source picker");
         let response = screencast
             .start(&session, None)
             .await
@@ -231,7 +231,7 @@ async fn run_portal_flow() -> Result<PortalResult, CaptureError> {
         let stream = streams.streams().first().ok_or(CaptureError::NoStream)?;
         let node_id = stream.pipe_wire_node_id();
         let (width, height) = stream.size().unwrap_or((0, 0));
-        debug!(node_id, width, height, "Window selected");
+        debug!(node_id, width, height, "Source selected");
 
         let fd = screencast
             .open_pipe_wire_remote(&session)
@@ -317,9 +317,23 @@ impl PortalCapture {
     ///         stream.stop()
     ///         session.close()
     pub fn select_window(&self) -> PyResult<Option<PortalSession>> {
+        self.select_source(SourceType::Window)
+    }
+
+    /// Show the system monitor picker and return a PortalSession.
+    ///
+    /// This is a blocking operation. Returns None if the user cancelled.
+    pub fn select_monitor(&self) -> PyResult<Option<PortalSession>> {
+        self.select_source(SourceType::Monitor)
+    }
+}
+
+impl PortalCapture {
+    fn select_source(&self, source_type: SourceType) -> PyResult<Option<PortalSession>> {
         // Release GIL before blocking D-Bus operations
-        let result =
-            Python::with_gil(|py| py.allow_threads(|| get_runtime().block_on(run_portal_flow())));
+        let result = Python::with_gil(|py| {
+            py.allow_threads(|| get_runtime().block_on(run_portal_flow(source_type)))
+        });
 
         match result {
             Ok(info) => Ok(Some(PortalSession {
